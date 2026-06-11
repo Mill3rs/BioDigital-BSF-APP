@@ -13,9 +13,9 @@ interface AuthState {
 }
 
 interface AuthContextValue extends AuthState {
-  login: (email: string, password: string) => Promise<void>;
+  login: (identifier: string, password: string) => Promise<void>;
   register: (payload: {
-    email: string;
+    email?: string;
     password: string;
     fullName: string;
     phoneNumber?: string;
@@ -34,6 +34,8 @@ interface AuthContextValue extends AuthState {
   }) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
+  updateUser: (updates: Partial<User>) => Promise<void>;
+  googleSignIn: (idToken: string, role?: string) => Promise<{ roleRequired: boolean }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -65,10 +67,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (identifier: string, password: string) => {
     setState(s => ({ ...s, isLoading: true, error: null }));
     try {
-      const response = await authAPI.login({ email, password });
+      const response = await authAPI.login({ identifier, password });
       if (!response.success) throw new Error(response.message || 'Login failed');
       const { token, refreshToken, user } = response.data;
       await AsyncStorage.multiSet([
@@ -85,7 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (payload: {
-    email: string;
+    email?: string;
     password: string;
     fullName: string;
     phoneNumber?: string;
@@ -162,8 +164,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearError = () => setState(s => ({ ...s, error: null }));
 
+  const googleSignIn = async (idToken: string, role?: string): Promise<{ roleRequired: boolean }> => {
+    setState(s => ({ ...s, isLoading: true, error: null }));
+    try {
+      const response = await authAPI.googleSignIn({ idToken, role });
+      if (!response.success) {
+        if (response.error === 'role_required') {
+          setState(s => ({ ...s, isLoading: false }));
+          return { roleRequired: true };
+        }
+        throw new Error(response.message || 'Google sign-in failed');
+      }
+      const { token, refreshToken, user } = response.data;
+      await AsyncStorage.multiSet([
+        ['authToken', token],
+        ['refreshToken', refreshToken],
+        ['user', JSON.stringify(user)],
+      ]);
+      setState({ user, token, isAuthenticated: true, isLoading: false, error: null });
+      return { roleRequired: false };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Google sign-in failed';
+      setState(s => ({ ...s, isLoading: false, error: msg }));
+      throw err;
+    }
+  };
+
+  const updateUser = async (updates: Partial<User>) => {
+    const stored = await AsyncStorage.getItem('user');
+    const merged = { ...(stored ? JSON.parse(stored) as User : {}), ...updates } as User;
+    await AsyncStorage.setItem('user', JSON.stringify(merged));
+    setState(s => ({ ...s, user: merged }));
+  };
+
   return (
-    <AuthContext.Provider value={{ ...state, login, register, verifyCompanyCode, completeLocation, logout, clearError }}>
+    <AuthContext.Provider value={{ ...state, login, register, verifyCompanyCode, completeLocation, logout, clearError, updateUser, googleSignIn }}>
       {children}
     </AuthContext.Provider>
   );

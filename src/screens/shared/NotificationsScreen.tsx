@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { notificationsAPI } from '../../api/notifications';
+import { useNotificationCount } from '../../store/notificationStore';
 import type { Notification } from '../../types';
 
 const GREEN = '#1B5E20';
@@ -80,6 +81,7 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>('All');
+  const { resetUnread, refreshUnread } = useNotificationCount();
 
   const load = useCallback(async () => {
     try {
@@ -93,12 +95,19 @@ export default function NotificationsScreen() {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { setLoading(true); load(); }, [load]));
+  // Clear badge immediately when screen is opened; re-fetch actual count on leave
+  useFocusEffect(useCallback(() => {
+    setLoading(true);
+    load();
+    resetUnread();
+    return () => { refreshUnread(); };
+  }, [load, resetUnread, refreshUnread]));
 
   const markRead = async (id: string) => {
     try {
       await notificationsAPI.markRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+      refreshUnread();
     } catch {
       // silent
     }
@@ -108,6 +117,7 @@ export default function NotificationsScreen() {
     try {
       await notificationsAPI.markAllRead();
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      resetUnread();
     } catch {
       // silent
     }

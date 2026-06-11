@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity,
+  View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity,
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import { cartAPI } from '../../api/cart';
 import { ordersAPI } from '../../api/orders';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../../utils/theme';
+import { GOOGLE_MAPS_API_KEY } from '../../utils/keys';
 import type { Cart, PaymentMethod, DeliveryAddress } from '../../types';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { BuyerStackParamList } from '../../navigation/BuyerNavigator';
@@ -23,6 +25,7 @@ export default function CheckoutScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH_ON_DELIVERY');
+  const placesRef = useRef<any>(null);
 
   const [address, setAddress] = useState<DeliveryAddress>({
     street: '',
@@ -33,6 +36,23 @@ export default function CheckoutScreen({ navigation }: Props) {
   });
   const [deliveryNotes, setDeliveryNotes] = useState('');
 
+  const handlePlaceSelect = (data: any, details: any) => {
+    if (!details) return;
+    const components: any[] = details.address_components ?? [];
+    const get = (...types: string[]) =>
+      components.find((c: any) => types.some(t => c.types.includes(t)))?.long_name ?? '';
+
+    const streetNumber = get('street_number');
+    const route = get('route');
+    const street = [streetNumber, route].filter(Boolean).join(' ') || data.description;
+    const city = get('locality', 'administrative_area_level_2', 'sublocality_level_1');
+    const region = get('administrative_area_level_1');
+    const country = get('country');
+    const postalCode = get('postal_code');
+
+    setAddress({ street, city, region, country: country || 'Ghana', postalCode });
+  };
+
   useEffect(() => {
     cartAPI.getCart()
       .then(res => setCart(res.data))
@@ -41,7 +61,8 @@ export default function CheckoutScreen({ navigation }: Props) {
   }, []);
 
   const tax = (cart?.subtotal ?? 0) * 0.15;
-  const total = (cart?.total ?? 0) + tax;
+  const deliveryFee = 15;
+  const total = (cart?.total ?? 0) + tax + deliveryFee;
 
   const handlePlaceOrder = async () => {
     if (!address.street.trim() || !address.city.trim()) {
@@ -72,81 +93,138 @@ export default function CheckoutScreen({ navigation }: Props) {
     return <View style={styles.centered}><ActivityIndicator color={Colors.primary} size="large" /></View>;
   }
 
+  const items = cart?.items ?? [];
+
+  const listHeader = (
+    <>
+      {/* Delivery Address */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>📍 Delivery Address</Text>
+        <Text style={styles.fieldLabel}>Search location *</Text>
+        <View style={styles.placesWrapper}>
+          <GooglePlacesAutocomplete
+            ref={placesRef}
+            placeholder="Search for your delivery address…"
+            fetchDetails
+            minLength={2}
+            debounce={300}
+            onPress={handlePlaceSelect}
+            query={{ key: GOOGLE_MAPS_API_KEY, language: 'en', components: 'country:gh' }}
+            textInputProps={{
+              placeholderTextColor: Colors.textLight,
+              returnKeyType: 'search',
+              autoCorrect: false,
+            }}
+            styles={{
+              textInputContainer: styles.placesInputContainer,
+              textInput: styles.placesInput,
+              listView: styles.placesListView,
+              row: styles.placesRow,
+              description: styles.placesDescription,
+              poweredContainer: styles.placesPoweredContainer,
+              separator: styles.placesSeparator,
+            }}
+            enablePoweredByContainer
+            keyboardShouldPersistTaps="handled"
+            keepResultsAfterBlur={false}
+          />
+        </View>
+
+        {address.street ? (
+          <View style={styles.addressSummary}>
+            <Text style={styles.addressSummaryText}>
+              {[address.street, address.city, address.region, address.country].filter(Boolean).join(', ')}
+            </Text>
+            <TouchableOpacity onPress={() => {
+              setAddress({ street: '', city: '', region: '', country: 'Ghana', postalCode: '' });
+              placesRef.current?.clear();
+            }}>
+              <Text style={styles.clearAddress}>✕ Clear</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        <Field label="Delivery Notes" value={deliveryNotes} onChange={setDeliveryNotes} placeholder="Additional instructions for driver…" multiline />
+      </View>
+
+      {/* Payment Method */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>💳 Payment Method</Text>
+        {PAYMENT_METHODS.map(m => (
+          <TouchableOpacity
+            key={m.value}
+            style={[styles.paymentOption, paymentMethod === m.value && styles.paymentOptionActive]}
+            onPress={() => setPaymentMethod(m.value)}>
+            <Text style={styles.paymentIcon}>{m.icon}</Text>
+            <Text style={[styles.paymentLabel, paymentMethod === m.value && styles.paymentLabelActive]}>
+              {m.label}
+            </Text>
+            <View style={[styles.radio, paymentMethod === m.value && styles.radioActive]}>
+              {paymentMethod === m.value && <View style={styles.radioDot} />}
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Order Summary header */}
+      <View style={[styles.section, styles.sectionHeaderOnly]}>
+        <Text style={styles.sectionTitle}>🧾 Order Summary</Text>
+      </View>
+    </>
+  );
+
+  const listFooter = (
+    <View style={styles.section}>
+      <View style={styles.divider} />
+      <View style={styles.itemRow}>
+        <Text style={styles.summaryLabel}>Subtotal</Text>
+        <Text style={styles.summaryValue}>GHS {cart?.subtotal.toFixed(2)}</Text>
+      </View>
+      <View style={styles.itemRow}>
+        <Text style={styles.summaryLabel}>Tax (15%)</Text>
+        <Text style={styles.summaryValue}>GHS {tax.toFixed(2)}</Text>
+      </View>
+      <View style={styles.itemRow}>
+        <Text style={styles.summaryLabel}>Delivery Fee</Text>
+        <Text style={styles.summaryValue}>GHS {deliveryFee.toFixed(2)}</Text>
+      </View>
+      <View style={styles.divider} />
+      <View style={styles.itemRow}>
+        <Text style={styles.totalLabel}>Total</Text>
+        <Text style={styles.totalValue}>GHS {total.toFixed(2)}</Text>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.placeOrderBtn, placing && styles.btnDisabled]}
+        onPress={handlePlaceOrder}
+        disabled={placing}>
+        {placing ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.placeOrderText}>Place Order • GHS {total.toFixed(2)}</Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-
-        {/* Delivery Address */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📍 Delivery Address</Text>
-          <Field label="Street / Area *" value={address.street} onChange={v => setAddress(a => ({ ...a, street: v }))} placeholder="e.g. 12 Accra Road" />
-          <Field label="City *" value={address.city} onChange={v => setAddress(a => ({ ...a, city: v }))} placeholder="e.g. Accra" />
-          <Field label="Region" value={address.region ?? ''} onChange={v => setAddress(a => ({ ...a, region: v }))} placeholder="e.g. Greater Accra" />
-          <Field label="Country" value={address.country} onChange={v => setAddress(a => ({ ...a, country: v }))} placeholder="e.g. Ghana" />
-          <Field label="Delivery Notes" value={deliveryNotes} onChange={setDeliveryNotes} placeholder="Additional instructions for driver..." multiline />
-        </View>
-
-        {/* Payment Method */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>💳 Payment Method</Text>
-          {PAYMENT_METHODS.map(m => (
-            <TouchableOpacity
-              key={m.value}
-              style={[styles.paymentOption, paymentMethod === m.value && styles.paymentOptionActive]}
-              onPress={() => setPaymentMethod(m.value)}>
-              <Text style={styles.paymentIcon}>{m.icon}</Text>
-              <Text style={[styles.paymentLabel, paymentMethod === m.value && styles.paymentLabelActive]}>
-                {m.label}
-              </Text>
-              <View style={[styles.radio, paymentMethod === m.value && styles.radioActive]}>
-                {paymentMethod === m.value && <View style={styles.radioDot} />}
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Order Summary */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>🧾 Order Summary</Text>
-          {cart?.items.map(item => (
-            <View key={item.id} style={styles.itemRow}>
-              <Text style={styles.itemName} numberOfLines={1}>
-                {item.variant.product.name} × {item.quantity}
-              </Text>
-              <Text style={styles.itemPrice}>GHS {(item.variant.price * item.quantity).toFixed(2)}</Text>
-            </View>
-          ))}
-          <View style={styles.divider} />
-          <View style={styles.itemRow}>
-            <Text style={styles.summaryLabel}>Subtotal</Text>
-            <Text style={styles.summaryValue}>GHS {cart?.subtotal.toFixed(2)}</Text>
+      <FlatList
+        data={items}
+        keyExtractor={i => i.id}
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={listHeader}
+        ListFooterComponent={listFooter}
+        renderItem={({ item }) => (
+          <View style={styles.orderItemRow}>
+            <Text style={styles.itemName} numberOfLines={1}>
+              {item.variant.product.name} × {item.quantity}
+            </Text>
+            <Text style={styles.itemPrice}>GHS {(item.variant.price * item.quantity).toFixed(2)}</Text>
           </View>
-          <View style={styles.itemRow}>
-            <Text style={styles.summaryLabel}>Tax (15%)</Text>
-            <Text style={styles.summaryValue}>GHS {tax.toFixed(2)}</Text>
-          </View>
-          <View style={styles.itemRow}>
-            <Text style={styles.summaryLabel}>Delivery</Text>
-            <Text style={[styles.summaryValue, { color: Colors.success }]}>Free</Text>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.itemRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>GHS {total.toFixed(2)}</Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.placeOrderBtn, placing && styles.btnDisabled]}
-          onPress={handlePlaceOrder}
-          disabled={placing}>
-          {placing ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.placeOrderText}>Place Order • GHS {total.toFixed(2)}</Text>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
+        )}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -176,11 +254,24 @@ const styles = StyleSheet.create({
   scroll: { padding: Spacing.md, paddingBottom: Spacing.xxl },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   section: { backgroundColor: Colors.surface, borderRadius: Radius.lg, padding: Spacing.lg, marginBottom: Spacing.md, ...Shadow.sm },
+  sectionHeaderOnly: { paddingBottom: Spacing.sm },
+  orderItemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.xs, paddingHorizontal: Spacing.lg },
   sectionTitle: { ...Typography.h4, color: Colors.textPrimary, marginBottom: Spacing.md },
   fieldGroup: { marginBottom: Spacing.md },
   fieldLabel: { ...Typography.label, color: Colors.textSecondary, marginBottom: 6 },
   input: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, padding: Spacing.md, ...Typography.body1, color: Colors.textPrimary, backgroundColor: Colors.surfaceAlt },
   inputMultiline: { height: 80, textAlignVertical: 'top' },
+  placesWrapper: { zIndex: 10, marginBottom: Spacing.md },
+  placesInputContainer: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, backgroundColor: Colors.surfaceAlt, paddingHorizontal: 4 },
+  placesInput: { ...Typography.body1, color: Colors.textPrimary, backgroundColor: 'transparent', height: 48, paddingHorizontal: 8 },
+  placesListView: { borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, marginTop: 4, backgroundColor: Colors.surface },
+  placesRow: { padding: Spacing.sm, backgroundColor: 'transparent' },
+  placesDescription: { ...Typography.body2, color: Colors.textPrimary },
+  placesPoweredContainer: { borderTopWidth: 0.5, borderTopColor: Colors.border, backgroundColor: Colors.surface },
+  placesSeparator: { height: 0.5, backgroundColor: Colors.border },
+  addressSummary: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', backgroundColor: '#e8f5e9', borderRadius: Radius.md, padding: Spacing.md, marginBottom: Spacing.md },
+  addressSummaryText: { flex: 1, ...Typography.body2, color: Colors.textPrimary, marginRight: Spacing.sm },
+  clearAddress: { ...Typography.caption, color: Colors.error },
   paymentOption: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, padding: Spacing.md, marginBottom: Spacing.sm },
   paymentOptionActive: { borderColor: Colors.primary, backgroundColor: '#e8f5e9' },
   paymentIcon: { fontSize: 22, marginRight: Spacing.md },

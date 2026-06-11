@@ -1,16 +1,69 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity,
   Image, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { productsAPI } from '../../api/products';
 import { cartAPI } from '../../api/cart';
+import { useCartCount } from '../../store/cartStore';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../../utils/theme';
+import { resolveImageUrl } from '../../utils/imageUtils';
 import type { Product, ProductCategory } from '../../types';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { BuyerStackParamList } from '../../navigation/BuyerNavigator';
 
 type Props = NativeStackScreenProps<BuyerStackParamList, 'Products'>;
+
+interface MergedShopProduct {
+  ids: string[];
+  name: string;
+  category: string;
+  batchTag: string | null;
+  totalQty: number;
+  minPrice: number;
+  maxPrice: number;
+  images: string[];
+  farm?: Product['farm'];
+  averageRating: number;
+  reviewCount: number;
+}
+
+function getBatchTag(p: Product): string | null {
+  return p.tags.find(t => /^BATCH-/i.test(t)) ?? null;
+}
+
+function mergeProducts(products: Product[]): MergedShopProduct[] {
+  const groups = new Map<string, Product[]>();
+  for (const p of products) {
+    const batch = getBatchTag(p);
+    const key = batch ? `${batch}::${p.category}` : `solo::${p.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(p);
+  }
+  return Array.from(groups.values()).map(group => {
+    const first = group[0];
+    const allVariants = group.flatMap(p => p.variants.filter(v => v.isActive));
+    const prices = allVariants.map(v => v.price);
+    const names = [...new Set(group.map(p => p.name))];
+    return {
+      ids: group.map(p => p.id),
+      name: names.length === 1 ? names[0] : names.slice(0, 2).join(' / '),
+      category: first.category,
+      batchTag: getBatchTag(first),
+      totalQty: allVariants.reduce((s, v) => s + v.quantity, 0),
+      minPrice: prices.length ? Math.min(...prices) : 0,
+      maxPrice: prices.length ? Math.max(...prices) : 0,
+      images: group.flatMap(p => p.images).slice(0, 3),
+      farm: first.farm,
+      reviewCount: group.reduce((s, p) => s + (p.reviewCount ?? p._count?.reviews ?? 0), 0),
+      averageRating: (() => {
+        const rated = group.filter(p => (p.averageRating ?? 0) > 0);
+        if (!rated.length) return 0;
+        return rated.reduce((s, p) => s + (p.averageRating ?? 0), 0) / rated.length;
+      })(),
+    };
+  });
+}
 
 const CATEGORIES: { label: string; value: ProductCategory | '' }[] = [
   { label: 'All', value: '' },
@@ -31,6 +84,7 @@ export default function ProductsScreen({ navigation }: Props) {
   const [addingToCart, setAddingToCart] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const { incrementCart } = useCartCount();
 
   const load = useCallback(async (reset = false) => {
     try {
@@ -61,12 +115,19 @@ export default function ProductsScreen({ navigation }: Props) {
 
   const onRefresh = () => { setRefreshing(true); load(true); };
 
-  const handleAddToCart = async (product: Product) => {
-    const firstVariant = product.variants[0];
+  const merged = useMemo(() => mergeProducts(products), [products]);
+
+  const handleAddToCart = async (item: MergedShopProduct) => {
+    const key = item.ids[0];
+    const firstVariant = products
+      .filter(p => item.ids.includes(p.id))
+      .flatMap(p => p.variants)
+      .find(v => v.isActive && v.quantity > 0);
     if (!firstVariant) return;
-    setAddingToCart(product.id);
+    setAddingToCart(key);
     try {
       await cartAPI.addItem(firstVariant.id, 1);
+      incrementCart();
     } catch {
       // silent
     } finally {
@@ -74,42 +135,64 @@ export default function ProductsScreen({ navigation }: Props) {
     }
   };
 
-  const minPrice = (p: Product) =>
-    p.variants.length ? Math.min(...p.variants.map(v => v.price)) : 0;
-
-  const renderProduct = ({ item }: { item: Product }) => (
-    <TouchableOpacity
-      style={styles.productCard}
-      onPress={() => navigation.navigate('ProductDetail', { productId: item.id })}>
-      {item.images.length > 0 ? (
-        <Image source={{ uri: item.images[0] }} style={styles.productImage} resizeMode="cover" />
-      ) : (
-        <View style={[styles.productImage, styles.productImagePlaceholder]}>
-          <Text style={styles.productImageIcon}>🌿</Text>
+  const renderProduct = ({ item }: { item: MergedShopProduct }) => {
+    const key = item.ids[0];
+    const isAdding = addingToCart === key;
+    const outOfStock = item.totalQty === 0;
+    const priceLabel = item.minPrice === item.maxPrice
+      ? `GHS ${item.minPrice.toFixed(2)}`
+      : `GHS ${item.minPrice.toFixed(2)} – ${item.maxPrice.toFixed(2)}`;
+    return (
+      <TouchableOpacity
+        style={styles.productCard}
+        onPress={() => navigation.navigate('ProductDetail', { productIds: item.ids })}>
+        <View style={styles.productImageWrapper}>
+          {item.images.length > 0 ? (
+            <Image source={{ uri: resolveImageUrl(item.images[0]) ?? undefined }} style={styles.productImage} resizeMode="contain" />
+          ) : (
+            <View style={[styles.productImage, styles.productImagePlaceholder]}>
+              <Text style={styles.productImageIcon}>🌿</Text>
+            </View>
+          )}
         </View>
-      )}
-      <View style={styles.productInfo}>
-        <Text style={styles.productCategory}>{item.category.replace(/_/g, ' ')}</Text>
-        <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
-        <Text style={styles.productFarm} numberOfLines={1}>
-          {item.farm?.name ?? 'BioDigital BSF'}
-        </Text>
-        <View style={styles.productFooter}>
-          <Text style={styles.productPrice}>GHS {minPrice(item).toFixed(2)}</Text>
-          <TouchableOpacity
-            style={[styles.addBtn, addingToCart === item.id && styles.addBtnDisabled]}
-            onPress={() => handleAddToCart(item)}
-            disabled={addingToCart === item.id}>
-            {addingToCart === item.id ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.addBtnText}>+ Cart</Text>
-            )}
-          </TouchableOpacity>
+        {outOfStock && (
+          <View style={styles.outOfStockBadge}>
+            <Text style={styles.outOfStockText}>Out of Stock</Text>
+          </View>
+        )}
+        <View style={styles.productInfo}>
+          <Text style={styles.productCategory}>{item.category.replace(/_/g, ' ')}</Text>
+          <Text style={styles.productName} numberOfLines={2}>{item.name}</Text>
+          <Text style={styles.productFarm} numberOfLines={1}>
+            {item.farm?.name ?? 'BioDigital BSF'}
+          </Text>
+          {item.reviewCount > 0 && (
+            <View style={styles.ratingRow}>
+              <Text style={styles.ratingStar}>★</Text>
+              <Text style={styles.ratingValue}>{item.averageRating.toFixed(1)}</Text>
+              <Text style={styles.ratingCount}>({item.reviewCount})</Text>
+            </View>
+          )}
+          <Text style={[styles.stockLabel, outOfStock && styles.stockLabelOos]}>
+            {outOfStock ? 'Out of stock' : `${item.totalQty} in stock`}
+          </Text>
+          <View style={styles.productFooter}>
+            <Text style={styles.productPrice}>{priceLabel}</Text>
+            <TouchableOpacity
+              style={[styles.addBtn, (isAdding || outOfStock) && styles.addBtnDisabled]}
+              onPress={() => handleAddToCart(item)}
+              disabled={isAdding || outOfStock}>
+              {isAdding ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.addBtnText}>+ Cart</Text>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -153,8 +236,8 @@ export default function ProductsScreen({ navigation }: Props) {
         <View style={styles.centered}><ActivityIndicator color={Colors.primary} size="large" /></View>
       ) : (
         <FlatList
-          data={products}
-          keyExtractor={p => p.id}
+          data={merged}
+          keyExtractor={p => p.ids[0]}
           numColumns={2}
           columnWrapperStyle={styles.row}
           contentContainerStyle={styles.listContent}
@@ -197,8 +280,9 @@ const styles = StyleSheet.create({
   categoryLabelActive: { color: '#fff' },
   listContent: { padding: Spacing.md, paddingTop: Spacing.sm },
   row: { justifyContent: 'space-between' },
-  productCard: { width: CARD_WIDTH, backgroundColor: Colors.surface, borderRadius: Radius.lg, marginBottom: Spacing.md, overflow: 'hidden', ...Shadow.sm },
-  productImage: { width: '100%', height: 130 },
+  productCard: { width: CARD_WIDTH, backgroundColor: Colors.surface, borderRadius: Radius.lg, marginBottom: Spacing.md, ...Shadow.sm },
+  productImageWrapper: { width: '100%', overflow: 'hidden', borderTopLeftRadius: Radius.lg, borderTopRightRadius: Radius.lg, backgroundColor: '#f0f4f0' },
+  productImage: { width: '100%', height: 140, backgroundColor: '#f0f4f0' },
   productImagePlaceholder: { backgroundColor: '#e8f5e9', alignItems: 'center', justifyContent: 'center' },
   productImageIcon: { fontSize: 40 },
   productInfo: { padding: Spacing.sm },
@@ -210,6 +294,18 @@ const styles = StyleSheet.create({
   addBtn: { backgroundColor: Colors.primary, borderRadius: Radius.sm, paddingHorizontal: Spacing.sm, paddingVertical: 4 },
   addBtnDisabled: { opacity: 0.7 },
   addBtnText: { ...Typography.caption, color: '#fff', fontWeight: '600' },
+  stockLabel: { ...Typography.caption, color: Colors.success, marginBottom: 4 },
+  stockLabelOos: { color: Colors.error },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  ratingStar: { fontSize: 12, color: Colors.warning },
+  ratingValue: { ...Typography.caption, color: Colors.warning, fontWeight: '700', marginLeft: 2, marginRight: 2 },
+  ratingCount: { ...Typography.caption, color: Colors.textLight },
+  outOfStockBadge: {
+    position: 'absolute', top: 8, left: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: Radius.sm,
+    paddingHorizontal: 6, paddingVertical: 2,
+  },
+  outOfStockText: { ...Typography.caption, color: '#fff', fontWeight: '600' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xxl },
   emptyIcon: { fontSize: 48, marginBottom: Spacing.md },
   emptyText: { ...Typography.body1, color: Colors.textSecondary },

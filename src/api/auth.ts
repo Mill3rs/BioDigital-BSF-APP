@@ -16,6 +16,13 @@ export const authAPI = {
     return data;
   },
 
+  googleSignIn: async (payload: { idToken: string; role?: string }) => {
+    const { data } = await apiClient.post<
+      ApiResponse<{ token: string; refreshToken: string; user: User }> & { error?: string }
+    >('/auth/google', payload);
+    return data;
+  },
+
   verifyCompanyCode: async (code: string) => {
     const { data } = await apiClient.post<
       ApiResponse<{ user: User; companyName: string }>

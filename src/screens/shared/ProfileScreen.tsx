@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Modal, FlatList, StatusBar,
+  TextInput, ActivityIndicator, Alert, Modal, FlatList, StatusBar, Image,
 } from 'react-native';
+import { launchImageLibrary } from 'react-native-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../../store/authStore';
 import { usersAPI } from '../../api/users';
 import { driverAPI } from '../../api/driver';
@@ -153,6 +155,12 @@ function DriverStatsSection({ driverProfile, avgTiming }: Readonly<DriverStatsSe
           <Text style={styles.statLabel}>Status</Text>
         </View>
       </View>
+      <View style={[styles.statsRow, { marginTop: 0 }]}>
+        <View style={[styles.statCard, styles.statCardDark]}>
+          <Text style={[styles.statValue, styles.statValueLight]}>{driverProfile.totalWasteDelivered ?? 0}</Text>
+          <Text style={[styles.statLabel, styles.statLabelLight]}>Waste Delivered</Text>
+        </View>
+      </View>
       {avgTiming ? (
         <View style={styles.timingCard}>
           <Text style={styles.timingCardTitle}>
@@ -173,6 +181,38 @@ function DriverStatsSection({ driverProfile, avgTiming }: Readonly<DriverStatsSe
         </View>
       ) : null}
     </>
+  );
+}
+
+// ── Supplier stats section ───────────────────────────────────────────────
+
+function SupplierStatsSection({ profile }: Readonly<{ profile: SupplierProfileData | undefined }>) {
+  if (!profile) return null;
+  const color = STATUS_COLORS[profile.status ?? ''] ?? '#888';
+  return (
+    <View style={styles.statsRow}>
+      <View style={[styles.statCard, styles.statCardDark]}>
+        <Text style={[styles.statValue, styles.statValueLight]}>
+          {(profile.totalWasteSupplied ?? 0).toFixed(1)}
+        </Text>
+        <Text style={[styles.statLabel, styles.statLabelLight]}>kg Supplied</Text>
+      </View>
+      {profile.rating == null ? null : (
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{profile.rating.toFixed(1)}</Text>
+          <Text style={styles.statLabel}>Rating</Text>
+        </View>
+      )}
+      {profile.status ? (
+        <View style={styles.statCard}>
+          <View style={[styles.statusPill, { backgroundColor: color + '18' }]}>
+            <View style={[styles.statusDot, { backgroundColor: color }]} />
+            <Text style={[styles.statusPillText, { color }]}>{profile.status}</Text>
+          </View>
+          <Text style={styles.statLabel}>Status</Text>
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -228,9 +268,6 @@ function SupplierInfoCard({ profile }: Readonly<{ profile: SupplierProfileData |
         {profile.status ? <InfoRow icon="📊" label="Status" value={profile.status} /> : null}
         {profile.rating == null ? null : (
           <InfoRow icon="⭐" label="Rating" value={`${profile.rating.toFixed(1)} ★`} />
-        )}
-        {profile.totalWasteSupplied == null ? null : (
-          <InfoRow icon="♻️" label="Total Waste Supplied" value={`${profile.totalWasteSupplied.toFixed(1)} kg`} last />
         )}
         {(profile.pointsBalance ?? 0) > 0 ? (
           <InfoRow icon="🏆" label="Points Balance" value={`${(profile.pointsBalance ?? 0).toLocaleString()} pts`} last />
@@ -300,7 +337,8 @@ function SecurityCard({
 // ── Main component ────────────────────────────────────────────────────────
 
 export default function ProfileScreen() {
-  const { user, logout } = useAuth();
+  const { user, logout, updateUser } = useAuth();
+  const navigation = useNavigation<any>();
   const [editMode, setEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [changingPwd, setChangingPwd] = useState(false);
@@ -321,7 +359,7 @@ export default function ProfileScreen() {
       )
     : COUNTRY_CODES;
 
-  const [form, setForm] = useState({ fullName: '' });
+  const [form, setForm] = useState({ fullName: '', location: '' });
   const [pwdForm, setPwdForm] = useState({
     currentPassword: '',
     newPassword: '',
@@ -330,7 +368,7 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     if (user) {
-      setForm({ fullName: user.fullName ?? '' });
+      setForm({ fullName: user.fullName ?? '', location: user.location ?? '' });
       const stored = user.phoneNumber ?? '';
       if (stored) {
         const parsed = parseStoredPhone(stored);
@@ -351,7 +389,7 @@ export default function ProfileScreen() {
     setSaving(true);
     try {
       const phoneNumber = phoneLocal.trim() ? phoneCountry.dial + phoneLocal.trim() : '';
-      await usersAPI.updateProfile({ fullName: form.fullName, phoneNumber });
+      await usersAPI.updateProfile({ fullName: form.fullName, phoneNumber, location: form.location });
       setEditMode(false);
       Alert.alert('Success', 'Profile updated!');
     } catch {
@@ -377,6 +415,32 @@ export default function ProfileScreen() {
     }
   };
 
+  const [avatarUploading, setAvatarUploading] = useState(false);
+
+  const handleAvatarPress = () => {
+    launchImageLibrary({ mediaType: 'photo', quality: 0.5, includeBase64: true }, async (response) => {
+      if (response.didCancel || response.errorCode) return;
+      const asset = response.assets?.[0];
+      if (!asset?.base64) return;
+      const mimeType = 'image/jpeg';
+      setAvatarUploading(true);
+      try {
+        const result = await usersAPI.uploadProfilePicture(
+          asset.base64,
+          mimeType,
+        );
+        if (result.success && result.data) {
+          await updateUser({ profileImage: (result.data as { profileImage?: string }).profileImage ?? undefined });
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        Alert.alert('Upload failed', msg);
+      } finally {
+        setAvatarUploading(false);
+      }
+    });
+  };
+
   const handleLogout = () => {
     Alert.alert('Logout', 'Are you sure you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
@@ -397,9 +461,25 @@ export default function ProfileScreen() {
 
         {/* Hero */}
         <View style={styles.hero}>
-          <View style={styles.avatarWrap}>
-            <Text style={styles.avatarText}>{initials}</Text>
-          </View>
+          <TouchableOpacity style={styles.avatarWrap} onPress={handleAvatarPress} disabled={avatarUploading}>
+            {user?.profileImage ? (
+              <Image
+                source={{ uri: `http://192.168.1.176:3000${user.profileImage}` }}
+                style={styles.avatarImage}
+              />
+            ) : (
+              <Text style={styles.avatarText}>{initials}</Text>
+            )}
+            {avatarUploading ? (
+              <View style={styles.avatarOverlay}>
+                <ActivityIndicator color="#FFF" />
+              </View>
+            ) : (
+              <View style={styles.avatarCamera}>
+                <Text style={styles.avatarCameraIcon}>📷</Text>
+              </View>
+            )}
+          </TouchableOpacity>
           <Text style={styles.heroName}>{user?.fullName ?? '—'}</Text>
           <View style={styles.heroBadge}>
             <Text style={styles.heroBadgeText}>{ROLE_LABELS[user?.role ?? ''] ?? user?.role}</Text>
@@ -409,6 +489,9 @@ export default function ProfileScreen() {
 
         {/* Driver stats */}
         {isDriver ? <DriverStatsSection driverProfile={driverProfile} avgTiming={avgTiming} /> : null}
+
+        {/* Supplier stats */}
+        {user?.role === 'SUPPLIER' ? <SupplierStatsSection profile={user.supplierProfile} /> : null}
 
         {/* Personal info */}
         <SectionLabel label="Personal Information" />
@@ -441,6 +524,14 @@ export default function ProfileScreen() {
                 placeholder="000 000 0000"
                 placeholderTextColor={TEXT_MUTED}
               />
+              <Text style={styles.editLabel}>Location</Text>
+              <TextInput
+                style={styles.editInput}
+                value={form.location}
+                onChangeText={set('location')}
+                placeholder="e.g. Accra, Ghana"
+                placeholderTextColor={TEXT_MUTED}
+              />
               <Text style={styles.editLabel}>Email Address</Text>
               <Text style={styles.editReadOnly}>{user?.email ?? '—'}</Text>
               <View style={styles.editActions}>
@@ -458,6 +549,7 @@ export default function ProfileScreen() {
             <>
               <InfoRow icon="👤" label="Full Name" value={user?.fullName ?? '—'} />
               <InfoRow icon="📞" label="Phone" value={user?.phoneNumber ?? '—'} />
+              <InfoRow icon="📍" label="Location" value={user?.location ?? '—'} />
               <InfoRow icon="✉️" label="Email" value={user?.email ?? '—'} last />
               <TouchableOpacity style={styles.editProfileBtn} onPress={() => setEditMode(true)}>
                 <Text style={styles.editProfileBtnText}>Edit Profile</Text>
@@ -488,6 +580,17 @@ export default function ProfileScreen() {
         <View style={styles.card}>
           <SettingsRow icon="📱" label="Version" value="1.0.0" />
           <SettingsRow icon="🌿" label="BioDigital BSF Farm" last />
+        </View>
+
+        {/* Support */}
+        <SectionLabel label="Support" />
+        <View style={styles.card}>
+          <SettingsRow
+            icon="🆘"
+            label="Report an Issue"
+            onPress={() => navigation.navigate('ReportIssue')}
+            last
+          />
         </View>
 
         {/* Logout */}
@@ -575,6 +678,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   avatarText: { fontSize: 32, fontWeight: '800', color: '#FFF' },
+  avatarImage: { width: 84, height: 84, borderRadius: 42 },
+  avatarOverlay: {
+    position: 'absolute', top: 0, left: 0, width: 84, height: 84,
+    borderRadius: 42, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center',
+  },
+  avatarCamera: {
+    position: 'absolute', bottom: 0, right: 0,
+    backgroundColor: GREEN, borderRadius: 12, padding: 3,
+  },
+  avatarCameraIcon: { fontSize: 12 },
   heroName: { fontSize: 22, fontWeight: '800', color: '#FFF', marginBottom: 6 },
   heroBadge: {
     backgroundColor: 'rgba(255,255,255,0.18)',

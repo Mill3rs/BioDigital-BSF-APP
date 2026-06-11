@@ -6,10 +6,11 @@ export type OnboardingStep = 'COMPLETE' | 'PENDING_CODE' | 'PENDING_LOCATION';
 
 export interface User {
   id: string;
-  email: string;
+  email?: string;
   fullName: string;
   phoneNumber?: string;
   profileImage?: string;
+  location?: string;
   role: UserRole;
   status: UserStatus;
   onboardingStep: OnboardingStep;
@@ -28,12 +29,12 @@ export interface AuthTokens {
 }
 
 export interface LoginPayload {
-  email: string;
+  identifier: string; // email or phone number
   password: string;
 }
 
 export interface RegisterPayload {
-  email: string;
+  email?: string;
   password: string;
   fullName: string;
   phoneNumber?: string;
@@ -56,6 +57,7 @@ export interface DriverProfile {
   vehiclePlateNumber?: string;
   rating: number;
   totalDeliveries: number;
+  totalWasteDelivered?: number;
   status: DriverStatus;
   verifiedAt?: string;
 }
@@ -155,6 +157,18 @@ export interface ProductVariant {
   isActive: boolean;
 }
 
+export interface ProductReview {
+  id: string;
+  userId: string;
+  rating: number;
+  title?: string;
+  comment?: string;
+  helpful: number;
+  verified: boolean;
+  createdAt: string;
+  user: { id: string; fullName: string; profileImage?: string };
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -167,6 +181,9 @@ export interface Product {
   status: string;
   variants: ProductVariant[];
   farm?: Farm;
+  averageRating?: number;
+  reviewCount?: number;
+  reviews?: ProductReview[];
   _count?: { reviews: number };
   createdAt: string;
 }
@@ -190,7 +207,7 @@ export interface Cart {
 
 // ─── Orders ──────────────────────────────────────────────────────────────────
 
-export type OrderStatus = 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'READY_FOR_PICKUP' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'CANCELLED' | 'REFUNDED';
+export type OrderStatus = 'PENDING' | 'CONFIRMED' | 'PROCESSING' | 'READY_FOR_PICKUP' | 'SHIPPED' | 'OUT_FOR_DELIVERY' | 'DELIVERED' | 'COMPLETED' | 'CANCELLED' | 'REFUNDED';
 export type PaymentMethod = 'CASH_ON_DELIVERY' | 'MOBILE_MONEY' | 'BANK_TRANSFER' | 'CREDIT_CARD' | 'DEBIT_CARD';
 export type PaymentStatus = 'PENDING' | 'PAID' | 'FAILED' | 'REFUNDED';
 
@@ -202,6 +219,7 @@ export interface OrderItem {
   variant: ProductVariant & {
     product: Pick<Product, 'id' | 'name' | 'images'>;
   };
+  review?: { productId: string; rating: number; title?: string; comment?: string } | null;
 }
 
 export interface DeliveryAddress {

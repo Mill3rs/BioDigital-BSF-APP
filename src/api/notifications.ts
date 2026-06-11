@@ -9,6 +9,11 @@ export const notificationsAPI = {
     return data;
   },
 
+  getUnreadCount: async (): Promise<number> => {
+    const { data } = await apiClient.get<ApiResponse<{ unreadCount: number }>>('/notifications/unread/count');
+    return data.data?.unreadCount ?? 0;
+  },
+
   markRead: async (id: string) => {
     const { data } = await apiClient.patch<ApiResponse<Notification>>(`/notifications/${id}/read`);
     return data;

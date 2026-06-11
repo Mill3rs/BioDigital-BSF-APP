@@ -5,12 +5,15 @@ import { View, Text, StyleSheet } from 'react-native';
 
 import DriverDashboardScreen from '../screens/driver/DriverDashboardScreen';
 import DeliveryDetailScreen from '../screens/driver/DeliveryDetailScreen';
+import DeliveriesScreen from '../screens/driver/DeliveriesScreen';
 import WastePickupsScreen from '../screens/driver/WastePickupsScreen';
 import WastePickupMapScreen from '../screens/driver/WastePickupMapScreen';
 import WasteDetailScreen from '../screens/driver/WasteDetailScreen';
 import ProfileScreen from '../screens/shared/ProfileScreen';
 import NotificationsScreen from '../screens/shared/NotificationsScreen';
+import ReportIssueScreen from '../screens/shared/ReportIssueScreen';
 import type { WasteRecord } from '../types';
+import { NotificationCountProvider } from '../store/notificationStore';
 
 export type DriverStackParamList = {
   Deliveries: undefined;
@@ -20,6 +23,7 @@ export type DriverStackParamList = {
   WasteDetail: { item: WasteRecord };
   Profile: undefined;
   Notifications: undefined;
+  ReportIssue: undefined;
 };
 
 type TabParamList = {
@@ -97,7 +101,7 @@ function DriverTabs() {
       />
       <Tab.Screen
         name="PickupsTab"
-        component={WastePickupsScreen}
+        component={DeliveriesScreen}
         options={{ tabBarIcon: PickupsIcon }}
       />
       <Tab.Screen
@@ -111,6 +115,7 @@ function DriverTabs() {
 
 export default function DriverNavigator() {
   return (
+    <NotificationCountProvider>
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Deliveries" component={DriverTabs} />
       <Stack.Screen name="WastePickupMap" component={WastePickupMapScreen} />
@@ -139,6 +144,12 @@ export default function DriverNavigator() {
         component={NotificationsScreen}
         options={{ headerShown: true, headerTitle: 'Notifications', headerTintColor: GREEN }}
       />
+      <Stack.Screen
+        name="ReportIssue"
+        component={ReportIssueScreen}
+        options={{ headerShown: true, headerTitle: 'Report an Issue', headerTintColor: GREEN }}
+      />
     </Stack.Navigator>
+    </NotificationCountProvider>
   );
 }

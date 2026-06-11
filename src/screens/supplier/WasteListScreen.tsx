@@ -91,6 +91,15 @@ export default function WasteListScreen({ navigation }: Props) {
     const cfg = STATUS_CONFIG[item.status] ?? { bg: '#F5F5F5', text: '#666' };
     const label = STATUS_LABEL[item.status] ?? item.status.replace(/_/g, ' ');
     const pts = (item as any).pointsAwarded ?? 0;
+    const isTracking = item.status === 'COLLECTED' || item.status === 'IN_TRANSIT';
+
+    const loc = item.location as any;
+    const supplierCoords =
+      loc?.lat && loc?.lng
+        ? { latitude: loc.lat, longitude: loc.lng }
+        : undefined;
+    const supplierAddress: string =
+      [loc?.address, item.sourceName].filter(Boolean).join(' · ') || item.sourceName;
 
     return (
       <View style={styles.card}>
@@ -114,6 +123,20 @@ export default function WasteListScreen({ navigation }: Props) {
             <View style={styles.pointsPill}>
               <Text style={styles.pointsText}>+{pts} pts</Text>
             </View>
+          )}
+          {isTracking && (
+            <TouchableOpacity
+              style={styles.trackBtn}
+              onPress={() =>
+                (navigation as any).navigate('DriverTracking', {
+                  wasteId: item.id,
+                  supplierCoords,
+                  supplierAddress,
+                })
+              }
+              activeOpacity={0.8}>
+              <Text style={styles.trackBtnText}>🚗 Track</Text>
+            </TouchableOpacity>
           )}
         </View>
       </View>
@@ -197,6 +220,8 @@ const styles = StyleSheet.create({
   weightText:       { ...Typography.caption, color: Colors.textSecondary, fontWeight: '500' },
   pointsPill:       { backgroundColor: '#FFF3E0', borderRadius: Radius.full, paddingHorizontal: 8, paddingVertical: 3 },
   pointsText:       { fontSize: 11, fontWeight: '700', color: '#E65100' },
+  trackBtn:         { marginLeft: 'auto' as const, backgroundColor: '#EDE7F6', borderRadius: Radius.full, paddingHorizontal: 10, paddingVertical: 4 },
+  trackBtnText:     { fontSize: 11, fontWeight: '700', color: '#4527A0' },
   centered:         { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyState:       { alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
   emptyIcon:        { fontSize: 56, marginBottom: Spacing.md },

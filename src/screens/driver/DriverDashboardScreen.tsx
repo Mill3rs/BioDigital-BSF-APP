@@ -12,7 +12,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { driverAPI } from '../../api/driver';
 import { useAuth } from '../../store/authStore';
-import type { WasteRecord } from '../../types';
+import type { WasteRecord, Order } from '../../types';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { DriverStackParamList } from '../../navigation/DriverNavigator';
 
@@ -24,9 +24,9 @@ const FILTER_TABS: FilterTab[] = ['All', 'Pending', 'Active', 'Completed'];
 // Map display filter → actual backend status values
 const FILTER_STATUS_MAP: Record<FilterTab, string[]> = {
   All: [],
-  Pending: ['PENDING', 'SCHEDULED'],
-  Active: ['COLLECTED', 'IN_TRANSIT'],
-  Completed: ['PROCESSING', 'PROCESSED', 'COMPLETED'],
+  Pending: ['PENDING', 'SCHEDULED', 'READY_FOR_PICKUP'],
+  Active: ['COLLECTED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY'],
+  Completed: ['PROCESSING', 'PROCESSED', 'COMPLETED', 'ACKNOWLEDGED', 'DELIVERED'],
 };
 
 const STATUS_META: Record<string, { label: string; bg: string; text: string }> = {
@@ -51,14 +51,19 @@ export default function DriverDashboardScreen({ navigation }: Readonly<Props>) {
   const firstName = user?.fullName?.split(' ')[0] ?? 'Driver';
 
   const [pickups, setPickups] = useState<WasteRecord[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<FilterTab>('All');
 
   const load = useCallback(async () => {
     try {
-      const res = await driverAPI.getWastePickups();
-      setPickups(res.data ?? []);
+      const [wasteRes, ordersRes] = await Promise.allSettled([
+        driverAPI.getWastePickups(),
+        driverAPI.getDeliveries(),
+      ]);
+      if (wasteRes.status === 'fulfilled') setPickups(wasteRes.value.data ?? []);
+      if (ordersRes.status === 'fulfilled') setOrders(ordersRes.value.data ?? []);
     } catch {
       // keep existing
     } finally {
@@ -73,17 +78,29 @@ export default function DriverDashboardScreen({ navigation }: Readonly<Props>) {
     ? pickups
     : pickups.filter(p => FILTER_STATUS_MAP[activeTab].includes(p.status));
 
-  const todayCount = pickups.filter(p => {
-    const d = new Date(p.date);
-    const now = new Date();
-    return d.toDateString() === now.toDateString();
-  }).length;
+  const filteredOrders = activeTab === 'All'
+    ? orders
+    : orders.filter(o => FILTER_STATUS_MAP[activeTab].includes(o.status));
 
-  const completedCount = pickups.filter(p =>
-    ['PROCESSING', 'PROCESSED', 'COMPLETED'].includes(p.status),
-  ).length;
-  const successRate = pickups.length > 0
-    ? Math.round((completedCount / pickups.length) * 100)
+  const todayCount = [
+    ...pickups.filter(p => {
+      const d = new Date(p.date);
+      return d.toDateString() === new Date().toDateString();
+    }),
+    ...orders.filter(o => {
+      const d = new Date(o.createdAt);
+      return d.toDateString() === new Date().toDateString();
+    }),
+  ].length;
+
+  const completedCount = [
+    ...pickups.filter(p => ['PROCESSING', 'PROCESSED', 'COMPLETED'].includes(p.status)),
+    ...orders.filter(o => ['DELIVERED', 'COMPLETED'].includes(o.status)),
+  ].length;
+
+  const totalCount = pickups.length + orders.length;
+  const successRate = totalCount > 0
+    ? Math.round((completedCount / totalCount) * 100)
     : 95;
 
   const getAddressText = (item: WasteRecord): string => {
@@ -122,17 +139,67 @@ export default function DriverDashboardScreen({ navigation }: Readonly<Props>) {
   const isActionable = (item: WasteRecord) =>
     ['PENDING', 'SCHEDULED'].includes(item.status);
 
+  const ORDER_STATUS_COLOR: Record<string, string> = {
+    PENDING: '#F57C00',
+    CONFIRMED: '#1565C0',
+    PROCESSING: '#6A1B9A',
+    READY_FOR_PICKUP: ACCENT,
+    OUT_FOR_DELIVERY: '#0277BD',
+    DELIVERED: GREEN,
+    CANCELLED: '#C62828',
+  };
+
+  const WASTE_DONE_STATUSES = new Set(['PROCESSING', 'PROCESSED', 'COMPLETED', 'ACKNOWLEDGED']);
+  const ORDER_DONE_STATUSES = new Set(['DELIVERED', 'COMPLETED', 'CANCELLED']);
+
+  const renderOrderCard = (item: Order) => {
+    const statusColor = ORDER_STATUS_COLOR[item.status] ?? '#666';
+    const statusLabel = item.status.replaceAll('_', ' ');
+    const isDone = ORDER_DONE_STATUSES.has(item.status);
+    return (
+      <TouchableOpacity
+        key={item.id}
+        style={[styles.card, { borderLeftWidth: 3, borderLeftColor: statusColor }]}
+        activeOpacity={isDone ? 1 : 0.85}
+        disabled={isDone}
+        onPress={() => navigation.navigate('DeliveryDetail', { orderId: item.id })}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardTitle}>🛒 Order #{item.orderNumber}</Text>
+          <View style={[styles.badge, { backgroundColor: statusColor + '22' }]}>
+            <Text style={[styles.badgeText, { color: statusColor }]}>{statusLabel}</Text>
+          </View>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoIcon}>👤</Text>
+          <Text style={styles.infoText}>{item.customer?.fullName ?? 'Customer'}</Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoIcon}>📍</Text>
+          <Text style={styles.infoText} numberOfLines={1}>
+            {(item.deliveryAddress as any)?.street}, {(item.deliveryAddress as any)?.city}
+          </Text>
+        </View>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaItem}>💰 GHS {item.total?.toFixed(2)}</Text>
+          <Text style={styles.metaItem}>📦 {item.items?.length ?? 0} item(s)</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const renderItem = ({ item, index }: { item: WasteRecord; index: number }) => {
     const m = meta(item);
     const addr = getAddressText(item);
     const dist = getDistance(item);
     const time = getTime(item);
     const showBtn = isActionable(item) && index === 0;
+    const isDone = WASTE_DONE_STATUSES.has(item.status);
 
     return (
       <TouchableOpacity
         style={styles.card}
-        activeOpacity={0.85}
+        activeOpacity={isDone ? 1 : 0.85}
+        disabled={isDone}
         onPress={async () => {
           try {
             const res = await driverAPI.getWasteById(item.id);
@@ -259,12 +326,25 @@ export default function DriverDashboardScreen({ navigation }: Readonly<Props>) {
               colors={[ACCENT]}
             />
           }
+          ListHeaderComponent={
+            filteredOrders.length > 0 ? (
+              <View>
+                <Text style={styles.sectionLabel}>Buyer Orders</Text>
+                {filteredOrders.map(o => renderOrderCard(o))}
+                {filtered.length > 0 && (
+                  <Text style={styles.sectionLabel}>Waste Pickups</Text>
+                )}
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
-            <View style={styles.emptyWrap}>
-              <Text style={styles.emptyIcon}>🚛</Text>
-              <Text style={styles.emptyTitle}>No pickups</Text>
-              <Text style={styles.emptySub}>Assigned pickups will appear here</Text>
-            </View>
+            filteredOrders.length === 0 ? (
+              <View style={styles.emptyWrap}>
+                <Text style={styles.emptyIcon}>🚛</Text>
+                <Text style={styles.emptyTitle}>No pickups</Text>
+                <Text style={styles.emptySub}>Assigned pickups will appear here</Text>
+              </View>
+            ) : null
           }
           renderItem={renderItem}
         />
@@ -428,4 +508,14 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 52, marginBottom: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '700', color: '#111', marginBottom: 6 },
   emptySub: { fontSize: 14, color: '#888', textAlign: 'center' },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#888',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginHorizontal: 4,
+    marginTop: 8,
+    marginBottom: 4,
+  },
 });

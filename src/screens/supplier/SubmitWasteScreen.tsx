@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, StatusBar, Platform,
+  View, Text, StyleSheet, FlatList, ScrollView, TouchableOpacity,
+  TextInput, ActivityIndicator, Alert, StatusBar, Platform, PermissionsAndroid,
 } from 'react-native';
 import Geolocation from '@react-native-community/geolocation';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import { wasteAPI } from '../../api/waste';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { createWasteRecord } from '../../services/wasteDbService';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../../utils/theme';
+import { GOOGLE_MAPS_API_KEY } from '../../utils/keys';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { SupplierStackParamList } from '../../navigation/SupplierNavigator';
 
@@ -22,6 +24,9 @@ const SOURCE_TYPES = [
   { key: 'OTHER',        label: 'Other',        emoji: '♻️' },
 ];
 
+const CUSTOM_KEY = '__custom__';
+const CUSTOM_OPTION = { key: CUSTOM_KEY, label: 'Other / Custom', emoji: '✏️' };
+
 const SUB_TYPES: Record<string, { key: string; label: string; emoji: string }[]> = {
   FOOD_WASTE: [
     { key: 'restaurant_scraps',    label: 'Restaurant Scraps',    emoji: '🍽️' },
@@ -32,6 +37,7 @@ const SUB_TYPES: Record<string, { key: string; label: string; emoji: string }[]>
     { key: 'fruit_peels',          label: 'Fruit Peels',          emoji: '🍊' },
     { key: 'vegetable_trimmings',  label: 'Vegetable Trimmings',  emoji: '🥦' },
     { key: 'expired_food',         label: 'Expired Food',         emoji: '⏰' },
+    CUSTOM_OPTION,
   ],
   AGRICULTURAL: [
     { key: 'banana',               label: 'Banana Peels / Stems', emoji: '🍌' },
@@ -45,6 +51,7 @@ const SUB_TYPES: Record<string, { key: string; label: string; emoji: string }[]>
     { key: 'rice',                 label: 'Rice Husks / Straw',   emoji: '🌾' },
     { key: 'sugarcane',            label: 'Sugarcane Bagasse',    emoji: '🎋' },
     { key: 'palm',                 label: 'Palm Fruit Waste',     emoji: '🌴' },
+    CUSTOM_OPTION,
   ],
   MARKET_WASTE: [
     { key: 'mixed_vegetable',      label: 'Mixed Vegetables',     emoji: '🥬' },
@@ -53,6 +60,7 @@ const SUB_TYPES: Record<string, { key: string; label: string; emoji: string }[]>
     { key: 'grain_waste',          label: 'Grain Waste',          emoji: '🌾' },
     { key: 'meat_offal',           label: 'Meat / Offal',         emoji: '🥩' },
     { key: 'mixed_market',         label: 'Mixed Market Waste',   emoji: '🛒' },
+    CUSTOM_OPTION,
   ],
   BREWERY: [
     { key: 'spent_grain',          label: 'Spent Grain',          emoji: '🫙' },
@@ -60,22 +68,26 @@ const SUB_TYPES: Record<string, { key: string; label: string; emoji: string }[]>
     { key: 'fruit_pomace',         label: 'Fruit Pomace',         emoji: '🍷' },
     { key: 'molasses',             label: 'Molasses Waste',       emoji: '🫗' },
     { key: 'distillery_slops',     label: 'Distillery Slops',     emoji: '🥃' },
+    CUSTOM_OPTION,
   ],
   HOUSEHOLD: [
     { key: 'kitchen_scraps',       label: 'Kitchen Scraps',       emoji: '🍴' },
     { key: 'garden_waste',         label: 'Garden / Yard Waste',  emoji: '🌱' },
     { key: 'fruit_veg_peels',      label: 'Fruit & Veg Peels',    emoji: '🥕' },
     { key: 'leftover_food',        label: 'Leftover Food',        emoji: '🥡' },
+    CUSTOM_OPTION,
   ],
   INDUSTRIAL: [
     { key: 'food_processing',      label: 'Food Processing Waste',     emoji: '🏭' },
     { key: 'slaughterhouse',       label: 'Slaughterhouse Waste',      emoji: '🐄' },
     { key: 'paper_cardboard',      label: 'Paper / Cardboard',         emoji: '📦' },
     { key: 'cannery_waste',        label: 'Cannery / Canning Waste',   emoji: '🥫' },
+    CUSTOM_OPTION,
   ],
   OTHER: [
     { key: 'mixed_organic',        label: 'Mixed Organic Waste',  emoji: '♻️' },
     { key: 'unspecified',          label: 'Unspecified',          emoji: '❓' },
+    CUSTOM_OPTION,
   ],
 };
 
@@ -100,55 +112,108 @@ export default function SubmitWasteScreen({ navigation }: Readonly<Props>) {
   } | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [atPickupLocation, setAtPickupLocation] = useState(false);
+  const [customSubType, setCustomSubType] = useState('');
 
   const set = (key: string) => (val: string) => setForm(prev => ({ ...prev, [key]: val }));
 
-  const captureGPS = (silent = false) => {
+  const captureGPS = async () => {
     setGpsLoading(true);
+
+    // Request permission on Android
+    if (Platform.OS === 'android') {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        {
+          title: 'Location Permission',
+          message: 'BioDigital BSF needs your location to set the pickup address.',
+          buttonPositive: 'Allow',
+          buttonNegative: 'Deny',
+        },
+      );
+      if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert(
+          'Permission Denied',
+          'Location permission was denied. You can still search for an address manually below.',
+        );
+        setGpsLoading(false);
+        return;
+      }
+    } else {
+      // iOS: request via the Geolocation API
+      Geolocation.requestAuthorization();
+    }
+
+    const onSuccess = (pos: any) => {
+      setLocation(prev => ({
+        ...prev,
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      }));
+      setGpsLoading(false);
+    };
+
+    const onError = () => {
+      // High-accuracy failed — retry with network/cell-based location
+      Geolocation.getCurrentPosition(
+        onSuccess,
+        () => {
+          Alert.alert(
+            'Location Unavailable',
+            'Could not detect your location. Please search for an address manually below.',
+          );
+          setGpsLoading(false);
+        },
+        { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 },
+      );
+    };
+
     Geolocation.getCurrentPosition(
-      pos => {
-        setLocation(prev => ({
-          ...prev,
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-        }));
-        setGpsLoading(false);
-      },
-      () => {
-        if (silent) {
-          // Auto-capture failed — uncheck so the manual field reappears
-          setAtPickupLocation(false);
-          Alert.alert('Location Unavailable', 'Could not detect your current location. Please enter the address manually.');
-        } else {
-          Alert.alert('GPS Error', 'Could not get your location. Please enter the address manually.');
-        }
-        setGpsLoading(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+      onSuccess,
+      onError,
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 },
     );
   };
 
-  const handleAtPickupToggle = () => {
-    const next = !atPickupLocation;
-    setAtPickupLocation(next);
-    if (next) {
-      // Clear any manual address and auto-grab GPS
-      setLocation(null);
-      captureGPS(true);
-    } else {
-      // Clear GPS coords so the manual field is fresh
-      setLocation(null);
+  // Auto-capture GPS on mount
+  useEffect(() => { captureGPS(); }, []);  // captureGPS is defined in scope, safe to run once
+
+  const renderGPSStatus = () => {
+    if (gpsLoading) {
+      return (
+        <View style={styles.gpsBanner}>
+          <ActivityIndicator color={Colors.primary} size="small" />
+          <Text style={styles.gpsBannerText}>Detecting your location…</Text>
+        </View>
+      );
     }
+    if (location?.lat) {
+      return (
+        <View style={styles.gpsBanner}>
+          <Text style={styles.gpsBannerIcon}>📍</Text>
+          <View style={styles.flexOne}>
+            <Text style={styles.gpsBannerTitle}>Location Captured</Text>
+            <Text style={styles.gpsBannerCoords}>
+              {location.lat.toFixed(5)}, {location.lng?.toFixed(5)}
+            </Text>
+          </View>
+          <TouchableOpacity onPress={captureGPS}>
+            <Text style={styles.gpsBannerRefresh}>↺ Recapture</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return (
+      <TouchableOpacity style={styles.gpsBtn} onPress={captureGPS}>
+        <Text style={styles.gpsIcon}>📍</Text>
+        <Text style={styles.gpsBtnText}>Detect My Location</Text>
+      </TouchableOpacity>
+    );
   };
 
   const handleNext = () => {
-    if (atPickupLocation && !location?.lat) {
-      Alert.alert('Location Pending', 'Your GPS location is still being captured. Please wait or tap Retry.');
-      return;
-    }
-    if (!atPickupLocation && !form.sourceName.trim()) {
-      Alert.alert('Required', 'Please enter a pickup location or source name.');
+    const hasLocation = !!(location?.lat || form.sourceName.trim() || location?.address);
+    if (!hasLocation) {
+      Alert.alert('Required', 'Please capture your GPS location or search for an address.');
       return;
     }
     if (!form.quantity.trim() || Number.isNaN(Number(form.quantity)) || Number(form.quantity) <= 0) {
@@ -162,37 +227,43 @@ export default function SubmitWasteScreen({ navigation }: Readonly<Props>) {
     setLoading(true);
     try {
       const isoDate = pickedDate.toISOString().split('T')[0];
-      const subLabel = SUB_TYPES[form.sourceType]?.find(s => s.key === form.sourceSubType)?.label;
+      const subLabel =
+        form.sourceSubType === CUSTOM_KEY
+          ? customSubType.trim() || 'Custom'
+          : SUB_TYPES[form.sourceType]?.find(s => s.key === form.sourceSubType)?.label;
       const resolvedName = form.sourceName.trim() || location?.address || 'My Location';
-      await wasteAPI.create({
+
+      // ── Save locally first (offline-first) ───────────────────────────────────
+      // createWasteRecord writes to WatermelonDB and kicks off a background sync.
+      await createWasteRecord({
         sourceName:  resolvedName,
         sourceType:  form.sourceType as any,
         quantity:    Number(form.quantity),
         unit:        form.unit,
         date:        isoDate,
         description: subLabel ? `${form.sourceType} — ${subLabel}` : form.sourceType,
-        notes:       form.notes.trim() || undefined,
+        notes:       form.notes.trim() || null,
         location:    (location?.lat || location?.address)
           ? { lat: location?.lat, lng: location?.lng, address: location?.address }
-          : undefined,
+          : null,
       });
       Alert.alert(
-        'Request Submitted! 🎉',
-        'Your pickup request has been submitted. A driver will be assigned shortly.',
+        'Request Saved! 🎉',
+        'Your pickup request has been saved. It will sync to the server automatically — a driver will be assigned shortly.',
         [{
           text: 'Done', onPress: () => {
             setStep(1);
             setForm({ sourceName: '', sourceType: 'FOOD_WASTE', sourceSubType: '', quantity: '', unit: 'kg', notes: '' });
+            setCustomSubType('');
             setPickedDate(new Date());
             setPickedTime(new Date());
             setLocation(null);
-            setAtPickupLocation(false);
             (navigation as any).navigate('WasteListTab');
           },
         }],
       );
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to submit. Please try again.');
+      Alert.alert('Error', e?.message ?? 'Failed to save. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -215,135 +286,129 @@ export default function SubmitWasteScreen({ navigation }: Readonly<Props>) {
         </View>
       </View>
 
-      <ScrollView
+      <FlatList
         style={styles.scroll}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}>
-
+        showsVerticalScrollIndicator={false}
+        data={[]}
+        keyExtractor={() => 'form'}
+        renderItem={null}
+        ListHeaderComponent={<>
         {step === 1 ? (
           <>
-            {/* Waste Type */}
+            {/* Waste Type — 2-column chip grid */}
             <Text style={styles.fieldLabel}>Waste Type</Text>
-            <View style={styles.typeList}>
-              {SOURCE_TYPES.map((t, index) => (
+            <View style={styles.typeGrid}>
+              {SOURCE_TYPES.map(t => (
                 <TouchableOpacity
                   key={t.key}
-                  style={[
-                    styles.typeListItem,
-                    form.sourceType === t.key && styles.typeListItemActive,
-                    index === SOURCE_TYPES.length - 1 && styles.typeListItemLast,
-                  ]}
+                  style={[styles.typeCard, form.sourceType === t.key && styles.typeCardActive]}
                   onPress={() => setForm(prev => ({ ...prev, sourceType: t.key, sourceSubType: '' }))}>
-                  <View style={styles.typeListLeft}>
-                    <Text style={styles.typeEmoji}>{t.emoji}</Text>
-                    <Text style={[styles.typeListLabel, form.sourceType === t.key && styles.typeListLabelActive]}>
-                      {t.label}
-                    </Text>
-                  </View>
-                  <View style={[styles.radioOuter, form.sourceType === t.key && styles.radioOuterActive]}>
-                    {form.sourceType === t.key && <View style={styles.radioInner} />}
-                  </View>
+                  <Text style={styles.typeCardEmoji}>{t.emoji}</Text>
+                  <Text style={[styles.typeCardLabel, form.sourceType === t.key && styles.typeCardLabelActive]}>
+                    {t.label}
+                  </Text>
+                  {form.sourceType === t.key && (
+                    <View style={styles.typeCardCheck}><Text style={styles.typeCardCheckMark}>✓</Text></View>
+                  )}
                 </TouchableOpacity>
               ))}
             </View>
 
-            {/* Sub-type */}
+            {/* Sub-type — horizontal scroll chips */}
             {SUB_TYPES[form.sourceType] && (
               <>
-                <Text style={styles.fieldLabel}>Specify Waste Item</Text>
-                <View style={styles.typeList}>
-                  {SUB_TYPES[form.sourceType].map((s, index) => (
+                <Text style={styles.fieldLabel}>Specific Waste Item</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.subTypeScroll}
+                  contentContainerStyle={styles.subTypeScrollContent}>
+                  {SUB_TYPES[form.sourceType].map(s => (
                     <TouchableOpacity
                       key={s.key}
                       style={[
-                        styles.typeListItem,
-                        form.sourceSubType === s.key && styles.typeListItemActive,
-                        index === SUB_TYPES[form.sourceType].length - 1 && styles.typeListItemLast,
+                        styles.subTypeChip,
+                        form.sourceSubType === s.key && styles.subTypeChipActive,
+                        s.key === CUSTOM_KEY && styles.subTypeChipCustom,
+                        s.key === CUSTOM_KEY && form.sourceSubType === s.key && styles.subTypeChipCustomActive,
                       ]}
                       onPress={() => setForm(prev => ({ ...prev, sourceSubType: s.key }))}>
-                      <View style={styles.typeListLeft}>
-                        <Text style={styles.typeEmoji}>{s.emoji}</Text>
-                        <Text style={[styles.typeListLabel, form.sourceSubType === s.key && styles.typeListLabelActive]}>
-                          {s.label}
-                        </Text>
-                      </View>
-                      <View style={[styles.radioOuter, form.sourceSubType === s.key && styles.radioOuterActive]}>
-                        {form.sourceSubType === s.key && <View style={styles.radioInner} />}
-                      </View>
+                      <Text style={styles.subTypeChipEmoji}>{s.emoji}</Text>
+                      <Text style={[
+                        styles.subTypeChipText,
+                        form.sourceSubType === s.key && styles.subTypeChipTextActive,
+                      ]}>
+                        {s.label}
+                      </Text>
                     </TouchableOpacity>
                   ))}
-                </View>
+                </ScrollView>
+
+                {/* Custom input when "Other / Custom" is selected */}
+                {form.sourceSubType === CUSTOM_KEY && (
+                  <View style={[styles.inputRow, styles.customInputRow]}>
+                    <Text style={styles.inputAdornment}>✏️</Text>
+                    <TextInput
+                      style={styles.inputInner}
+                      placeholder="Describe your waste item…"
+                      placeholderTextColor={Colors.textSecondary}
+                      value={customSubType}
+                      onChangeText={setCustomSubType}
+                      autoFocus
+                    />
+                  </View>
+                )}
               </>
             )}
 
             {/* Pickup Location */}
             <Text style={styles.fieldLabel}>Pickup Location / Source Name</Text>
 
-            {/* Checkbox — I am at the pickup location */}
-            <TouchableOpacity
-              style={styles.checkboxRow}
-              onPress={handleAtPickupToggle}
-              activeOpacity={0.7}>
-              <View style={[styles.checkbox, atPickupLocation && styles.checkboxChecked]}>
-                {atPickupLocation && <Text style={styles.checkmark}>✓</Text>}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.checkboxLabel}>I am at the pickup location</Text>
-                <Text style={styles.checkboxHint}>Tap to auto-capture your GPS coordinates</Text>
-              </View>
-            </TouchableOpacity>
+            {/* ── Section 1: Auto-detect GPS ── */}
+            <Text style={styles.locationSubLabel}>Auto-detect</Text>
+            {renderGPSStatus()}
 
-            {/* When checked: show GPS capture status */}
-            {atPickupLocation && (
-              <View style={styles.gpsBanner}>
-                {gpsLoading && (
-                  <>
-                    <ActivityIndicator color={Colors.primary} size="small" />
-                    <Text style={styles.gpsBannerText}>Detecting your location…</Text>
-                  </>
-                )}
-                {!gpsLoading && location?.lat && (
-                  <>
-                    <Text style={styles.gpsBannerIcon}>📍</Text>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.gpsBannerTitle}>Location Captured</Text>
-                      <Text style={styles.gpsBannerCoords}>
-                        {location.lat.toFixed(5)}, {location.lng?.toFixed(5)}
-                      </Text>
-                    </View>
-                    <TouchableOpacity onPress={() => captureGPS(true)}>
-                      <Text style={styles.gpsBannerRefresh}>↺ Refresh</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-                {!gpsLoading && !location?.lat && (
-                  <>
-                    <Text style={styles.gpsBannerIcon}>⚠️</Text>
-                    <Text style={[styles.gpsBannerText, { color: '#B71C1C' }]}>
-                      Could not detect location.{' '}
-                      <Text style={{ textDecorationLine: 'underline' }} onPress={() => captureGPS(true)}>
-                        Retry
-                      </Text>
-                    </Text>
-                  </>
-                )}
-              </View>
-            )}
-
-            {/* When NOT checked: manual text input */}
-            {!atPickupLocation && (
-              <View style={styles.inputRow}>
-                <Text style={styles.inputAdornment}>📍</Text>
-                <TextInput
-                  style={styles.inputInner}
-                  placeholder="e.g. Kumasi Central Market"
-                  placeholderTextColor={Colors.textSecondary}
-                  value={form.sourceName}
-                  onChangeText={set('sourceName')}
-                />
-              </View>
-            )}
+            {/* ── Section 2: Manual search via Google Places ── */}
+            <Text style={[styles.locationSubLabel, styles.locationSubLabelManual]}>Or search an address</Text>
+            <View style={styles.placesWrapper}>
+              <GooglePlacesAutocomplete
+                placeholder="e.g. Kumasi Central Market"
+                fetchDetails
+                minLength={1}
+                debounce={300}
+                onPress={(data, details = null) => {
+                  const lat = details?.geometry?.location?.lat;
+                  const lng = details?.geometry?.location?.lng;
+                  const address = data.description;
+                  setLocation(prev => ({ ...prev, lat, lng, address }));
+                  setForm(prev => ({ ...prev, sourceName: address }));
+                }}
+                query={{
+                  key: GOOGLE_MAPS_API_KEY,
+                  language: 'en',
+                }}
+                textInputProps={{
+                  placeholderTextColor: Colors.textSecondary,
+                  returnKeyType: 'search',
+                  autoCorrect: false,
+                }}
+                styles={{
+                  textInputContainer: styles.placesInputContainer,
+                  textInput: styles.placesInput,
+                  listView: styles.placesListView,
+                  row: styles.placesRow,
+                  description: styles.placesDescription,
+                  poweredContainer: styles.placesPoweredContainer,
+                  powered: styles.placesPowered,
+                  separator: styles.placesSeparator,
+                }}
+                enablePoweredByContainer
+                keyboardShouldPersistTaps="handled"
+                keepResultsAfterBlur={false}
+              />
+            </View>
 
             {/* Quantity + Unit */}
             <Text style={styles.fieldLabel}>Quantity</Text>
@@ -480,7 +545,8 @@ export default function SubmitWasteScreen({ navigation }: Readonly<Props>) {
             </View>
           </>
         )}
-      </ScrollView>
+        </>}
+      />
     </View>
   );
 }
@@ -512,12 +578,79 @@ const styles = StyleSheet.create({
   radioOuter:         { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
   radioOuterActive:   { borderColor: Colors.primary },
   radioInner:         { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.primary },
-  typeGrid:           { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  typeChip:           { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: Radius.full, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: '#fff' },
-  typeChipActive:     { backgroundColor: Colors.primary + '15', borderColor: Colors.primary },
-  typeEmoji:          { fontSize: 20 },
-  typeChipText:       { ...Typography.caption, color: Colors.textSecondary, fontWeight: '500' },
-  typeChipTextActive: { color: Colors.primary, fontWeight: '700' },
+  typeGrid:           { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  typeCard:           {
+    width: '47%', flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#fff', borderRadius: Radius.md, borderWidth: 1.5,
+    borderColor: Colors.border, paddingHorizontal: 12, paddingVertical: 12,
+    ...Shadow.sm, position: 'relative',
+  },
+  typeCardActive:     { borderColor: Colors.primary, backgroundColor: Colors.primary + '0D' },
+  typeCardEmoji:      { fontSize: 22 },
+  typeCardLabel:      { ...Typography.body2, color: '#1a1a1a', fontWeight: '500', flex: 1 },
+  typeCardLabelActive:{ color: Colors.primary, fontWeight: '700' },
+  typeCardCheck:      {
+    position: 'absolute', top: 6, right: 6,
+    width: 16, height: 16, borderRadius: 8,
+    backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center',
+  },
+  typeCardCheckMark:  { color: '#fff', fontSize: 10 },
+  customInputRow:     { marginTop: 8 },
+  locationSubLabel:   { fontSize: 11, fontWeight: '700', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: Spacing.sm, marginBottom: 6 },
+  locationSubLabelManual: { marginTop: Spacing.md },
+  flexOne:            { flex: 1 },
+  placesWrapper:      { marginTop: 0, zIndex: 10 },
+  placesInputContainer: {
+    backgroundColor: '#fff',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 0,
+    ...Shadow.sm,
+  },
+  placesInput:        {
+    ...Typography.body1,
+    color: '#1a1a1a',
+    backgroundColor: '#fff',
+    borderRadius: Radius.md,
+    height: 48,
+    paddingLeft: Spacing.md,
+  },
+  placesAdornment:    { fontSize: 16, alignSelf: 'center', paddingLeft: 10, paddingRight: 4 },
+  placesListView:     {
+    backgroundColor: '#fff',
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginTop: 2,
+    ...Shadow.sm,
+    zIndex: 99,
+    overflow: 'hidden',
+  },
+  placesRow:          { paddingHorizontal: Spacing.md, paddingVertical: 13 },
+  placesDescription:  { ...Typography.body2, color: '#1a1a1a', fontSize: 14 },
+  placesPoweredContainer: {
+    backgroundColor: '#fff',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  placesPowered:      { color: Colors.textSecondary },
+  placesSeparator:    { height: 1, backgroundColor: Colors.border },
+  subTypeScroll:      { marginTop: 4 },
+  subTypeScrollContent: { gap: 8, paddingVertical: 2, paddingRight: 4 },
+  subTypeChip:        {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 9, borderRadius: Radius.full,
+    borderWidth: 1.5, borderColor: Colors.border, backgroundColor: '#fff',
+  },
+  subTypeChipActive:  { backgroundColor: Colors.primary + '15', borderColor: Colors.primary },
+  subTypeChipCustom:  { borderStyle: 'dashed', borderColor: Colors.textSecondary },
+  subTypeChipCustomActive: { borderStyle: 'dashed', borderColor: Colors.primary, backgroundColor: Colors.primary + '10' },
+  subTypeChipEmoji:   { fontSize: 16 },
+  subTypeChipText:    { ...Typography.caption, color: Colors.textSecondary, fontWeight: '500' },
+  subTypeChipTextActive: { color: Colors.primary, fontWeight: '700' },
   inputRow:           { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, ...Shadow.sm },
   inputAdornment:     { fontSize: 16, marginRight: 8 },
   inputInner:         { flex: 1, ...Typography.body1, color: '#1a1a1a', paddingVertical: 13 },
@@ -529,15 +662,9 @@ const styles = StyleSheet.create({
   unitChipText:       { ...Typography.caption, color: Colors.textSecondary },
   unitChipTextActive: { color: '#fff', fontWeight: '700' },
   textArea:           { backgroundColor: '#fff', borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: 12, ...Typography.body1, color: '#1a1a1a', textAlignVertical: 'top', minHeight: 90, ...Shadow.sm },
-  gpsBtn:             { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: Colors.primary, borderRadius: Radius.md, padding: 12, marginTop: 8, backgroundColor: Colors.primary + '0D' },
+  gpsBtn:             { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: Colors.primary, borderRadius: Radius.md, padding: 12, backgroundColor: Colors.primary + '0D' },
   gpsIcon:            { fontSize: 18 },
   gpsBtnText:         { ...Typography.body2, color: Colors.primary, fontWeight: '600' },
-  checkboxRow:        { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: '#fff', borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, padding: Spacing.md, marginTop: Spacing.sm, ...Shadow.sm },
-  checkbox:           { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center', marginTop: 1, backgroundColor: '#fff' },
-  checkboxChecked:    { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  checkmark:          { color: '#fff', fontSize: 13, fontWeight: '700', lineHeight: 15 },
-  checkboxLabel:      { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
-  checkboxHint:       { ...Typography.caption, color: Colors.textSecondary, marginTop: 2 },
   gpsBanner:          { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#E8F5E9', borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.primary + '40', padding: Spacing.md, marginTop: 8 },
   gpsBannerIcon:      { fontSize: 20 },
   gpsBannerTitle:     { fontSize: 13, fontWeight: '700', color: '#1B5E20' },

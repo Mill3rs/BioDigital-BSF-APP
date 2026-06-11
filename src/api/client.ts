@@ -1,12 +1,11 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Android emulator → 10.0.2.2 maps to host machine; iOS simulator → localhost
-const BASE_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:3000/api'
-    : 'http://localhost:3000/api';
+// Android and iOS both use localhost — requires `adb reverse tcp:3000 tcp:3000`
+// for physical Android devices connected via USB (run once per session).
+// Emulators also work via ADB reverse; iOS simulator reaches host via localhost.
+// Physical Android device: run 'adb reverse tcp:3000 tcp:3000' once per USB session
+export const BASE_URL = 'http://192.168.1.176:3000/api';
 
 export const apiClient = axios.create({
   baseURL: BASE_URL,

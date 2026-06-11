@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   ActivityIndicator, RefreshControl,
@@ -17,6 +17,7 @@ const STATUS_FILTERS: { label: string; value: OrderStatus | '' }[] = [
   { label: 'Pending', value: 'PENDING' },
   { label: 'Processing', value: 'PROCESSING' },
   { label: 'Delivered', value: 'DELIVERED' },
+  { label: 'Completed', value: 'COMPLETED' },
   { label: 'Cancelled', value: 'CANCELLED' },
 ];
 
@@ -25,8 +26,10 @@ const STATUS_COLORS: Record<OrderStatus, string> = {
   CONFIRMED: Colors.info,
   PROCESSING: Colors.processing,
   READY_FOR_PICKUP: Colors.accentLight,
+  SHIPPED: Colors.info,
   OUT_FOR_DELIVERY: Colors.accent,
   DELIVERED: Colors.success,
+  COMPLETED: Colors.success,
   CANCELLED: Colors.error,
   REFUNDED: Colors.textSecondary,
 };
@@ -69,7 +72,13 @@ export default function OrdersScreen({ navigation }: Props) {
       </Text>
       <View style={styles.orderFooter}>
         <Text style={styles.orderTotal}>GHS {item.total.toFixed(2)}</Text>
-        <Text style={styles.orderArrow}>→</Text>
+        {item.status === 'COMPLETED' ? (
+          <View style={styles.reviewedBadge}>
+            <Text style={styles.reviewedBadgeText}>★ Reviewed</Text>
+          </View>
+        ) : (
+          <Text style={styles.orderArrow}>→</Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -134,6 +143,8 @@ const styles = StyleSheet.create({
   orderFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   orderTotal: { ...Typography.label, color: Colors.primary, fontWeight: '700' },
   orderArrow: { color: Colors.primary, fontSize: 18 },
+  reviewedBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.success + '18', paddingHorizontal: Spacing.sm, paddingVertical: 2, borderRadius: Radius.full },
+  reviewedBadgeText: { ...Typography.caption, color: Colors.success, fontWeight: '700' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyState: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xxl, marginTop: Spacing.xxl },
   emptyIcon: { fontSize: 56, marginBottom: Spacing.md },

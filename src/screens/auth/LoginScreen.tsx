@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,10 +10,22 @@ import {
   Platform,
   ActivityIndicator,
   StatusBar,
+  Image,
+  Modal,
+  FlatList,
+  Alert,
 } from 'react-native';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { useAuth } from '../../store/authStore';
+import { COUNTRY_CODES, type CountryCode } from '../../utils/countryCodes';
+import { apiClient } from '../../api/client';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../navigation/AuthNavigator';
+
+GoogleSignin.configure({
+  webClientId: '484345082412-4v6sr55etf3mmcclvh8ksi8ht59hrf0d.apps.googleusercontent.com',
+  offlineAccess: true,
+});
 
 const BG = '#0B1E10';
 const INPUT_BG = '#0F2216';
@@ -22,21 +34,85 @@ const ACCENT = '#4ADE80';
 const TEXT = '#FFFFFF';
 const SUBTEXT = 'rgba(255,255,255,0.5)';
 const PLACEHOLDER = 'rgba(255,255,255,0.3)';
+const TAB_BG = '#1A3425';
+
+const DEFAULT_COUNTRY = COUNTRY_CODES.find((c) => c.code === 'GH') ?? COUNTRY_CODES[0];
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
 
 export default function LoginScreen({ navigation }: Readonly<Props>) {
-  const { login, isLoading, error, clearError } = useAuth();
+  const { login, googleSignIn, isLoading, error, clearError } = useAuth();
+  const [loginMode, setLoginMode] = useState<'email' | 'phone'>('email');
   const [email, setEmail] = useState('');
+  const [selectedCountry, setSelectedCountry] = useState<CountryCode>(DEFAULT_COUNTRY);
+  const [phoneLocal, setPhoneLocal] = useState('');
+  const [countryPickerOpen, setCountryPickerOpen] = useState(false);
+  const [countrySearch, setCountrySearch] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [phoneAuthEnabled, setPhoneAuthEnabled] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [rolePicker, setRolePicker] = useState<{ open: boolean; idToken: string }>({ open: false, idToken: '' });
+
+  useEffect(() => {
+    apiClient
+      .get<{ success: boolean; data: { phoneAuthEnabled: boolean } }>('/auth/public-settings')
+      .then((res) => { if (res.data.success) setPhoneAuthEnabled(res.data.data.phoneAuthEnabled); })
+      .catch(() => { /* default to false */ });
+  }, []);
+
+  const filteredCountries = countrySearch.trim()
+    ? COUNTRY_CODES.filter(
+        (c) =>
+          c.name.toLowerCase().includes(countrySearch.toLowerCase()) ||
+          c.dial.includes(countrySearch),
+      )
+    : COUNTRY_CODES;
 
   const handleLogin = async () => {
-    if (!email.trim() || !password.trim()) return;
+    const identifier =
+      loginMode === 'phone'
+        ? selectedCountry.dial + phoneLocal.trim()
+        : email.trim();
+    if (!identifier || !password.trim()) return;
     try {
-      await login(email.trim(), password);
+      await login(identifier, password);
     } catch {
       // error displayed via error state
+    }
+  };
+
+  const handleGoogleSignIn = async (role?: string) => {
+    setGoogleLoading(true);
+    try {
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      const idToken = userInfo.data?.idToken ?? userInfo.idToken;
+      if (!idToken) throw new Error('No ID token from Google');
+      const result = await googleSignIn(idToken, role);
+      if (result.roleRequired) {
+        setRolePicker({ open: true, idToken });
+      }
+    } catch (err: unknown) {
+      const e = err as { code?: string; message?: string };
+      if (e.code === statusCodes.SIGN_IN_CANCELLED) return;
+      if (e.code === statusCodes.IN_PROGRESS) return;
+      Alert.alert('Google Sign-In failed', e.message ?? 'Something went wrong');
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
+  const handleRolePick = async (role: string) => {
+    setRolePicker(p => ({ ...p, open: false }));
+    setGoogleLoading(true);
+    try {
+      await googleSignIn(rolePicker.idToken, role);
+    } catch (err: unknown) {
+      const e = err as { message?: string };
+      Alert.alert('Sign-In failed', e.message ?? 'Something went wrong');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -52,10 +128,12 @@ export default function LoginScreen({ navigation }: Readonly<Props>) {
 
         {/* Brand */}
         <View style={styles.brand}>
-          <View style={styles.logoMark}>
-            <Text style={styles.logoLeaf}>🌿</Text>
-          </View>
-          <Text style={styles.brandName}>BioDigital BSF</Text>
+          <Image
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            source={require('../../assets/BioDigitalBSFWhiteMono.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
           <Text style={styles.brandTagline}>Sustainable Waste Solutions</Text>
         </View>
 
@@ -73,19 +151,54 @@ export default function LoginScreen({ navigation }: Readonly<Props>) {
           </View>
         ) : null}
 
+        {/* Login mode tabs — only shown when phone auth is enabled */}
+        {phoneAuthEnabled && (
+          <View style={styles.tabRow}>
+            <TouchableOpacity
+              style={[styles.tab, loginMode === 'email' && styles.tabActive]}
+              onPress={() => setLoginMode('email')}>
+              <Text style={[styles.tabText, loginMode === 'email' && styles.tabTextActive]}>Email</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, loginMode === 'phone' && styles.tabActive]}
+              onPress={() => setLoginMode('phone')}>
+              <Text style={[styles.tabText, loginMode === 'phone' && styles.tabTextActive]}>Phone</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Fields */}
         <View style={styles.form}>
-          <TextInput
-            style={styles.input}
-            placeholder="Email Address"
-            placeholderTextColor={PLACEHOLDER}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!isLoading}
-          />
+          {loginMode === 'email' ? (
+            <TextInput
+              style={styles.input}
+              placeholder="Email Address"
+              placeholderTextColor={PLACEHOLDER}
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!isLoading}
+            />
+          ) : (
+            <View style={styles.phoneRow}>
+              <TouchableOpacity
+                style={styles.dialPicker}
+                onPress={() => setCountryPickerOpen(true)}>
+                <Text style={styles.dialText}>{selectedCountry.flag} {selectedCountry.dial}</Text>
+              </TouchableOpacity>
+              <TextInput
+                style={styles.phoneInput}
+                placeholder="Phone Number"
+                placeholderTextColor={PLACEHOLDER}
+                value={phoneLocal}
+                onChangeText={(t) => setPhoneLocal(t.replace(/\D/g, ''))}
+                keyboardType="phone-pad"
+                editable={!isLoading}
+              />
+            </View>
+          )}
 
           <View style={styles.passwordWrap}>
             <TextInput
@@ -126,6 +239,29 @@ export default function LoginScreen({ navigation }: Readonly<Props>) {
           )}
         </TouchableOpacity>
 
+        {/* Divider */}
+        <View style={styles.dividerRow}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>or</Text>
+          <View style={styles.dividerLine} />
+        </View>
+
+        {/* Google Sign-In */}
+        <TouchableOpacity
+          style={[styles.googleBtn, googleLoading && styles.ctaBtnDisabled]}
+          onPress={() => handleGoogleSignIn()}
+          disabled={googleLoading}
+          activeOpacity={0.85}>
+          {googleLoading ? (
+            <ActivityIndicator color="#444" />
+          ) : (
+            <>
+              <Text style={styles.googleIcon}>G</Text>
+              <Text style={styles.googleBtnText}>Continue with Google</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
         {/* Footer */}
         <View style={styles.footer}>
           <Text style={styles.footerText}>Don't have an account? </Text>
@@ -135,6 +271,76 @@ export default function LoginScreen({ navigation }: Readonly<Props>) {
         </View>
 
       </ScrollView>
+
+      {/* Role picker modal (for new Google users) */}
+      <Modal
+        visible={rolePicker.open}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setRolePicker(p => ({ ...p, open: false }))}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Choose your role</Text>
+              <TouchableOpacity onPress={() => setRolePicker(p => ({ ...p, open: false }))}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, marginHorizontal: 16, marginBottom: 12 }}>
+              Select how you'll use the app
+            </Text>
+            {(['BUYER', 'SUPPLIER', 'DRIVER'] as const).map((r) => (
+              <TouchableOpacity
+                key={r}
+                style={[styles.countryItem]}
+                onPress={() => handleRolePick(r)}>
+                <Text style={styles.countryItemText}>
+                  {r === 'BUYER' ? '🛒  Buyer' : r === 'SUPPLIER' ? '🧑‍🌾  Supplier' : '🚚  Driver'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Country picker modal */}
+      <Modal
+        visible={countryPickerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setCountryPickerOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Country Code</Text>
+              <TouchableOpacity onPress={() => { setCountryPickerOpen(false); setCountrySearch(''); }}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search country or code…"
+              placeholderTextColor={PLACEHOLDER}
+              value={countrySearch}
+              onChangeText={setCountrySearch}
+              autoCapitalize="none"
+            />
+            <FlatList
+              data={filteredCountries}
+              keyExtractor={(item) => item.code}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.countryItem, item.code === selectedCountry.code && styles.countryItemActive]}
+                  onPress={() => { setSelectedCountry(item); setCountryPickerOpen(false); setCountrySearch(''); }}>
+                  <Text style={styles.countryItemText}>{item.flag}  {item.name}</Text>
+                  <Text style={styles.countryItemDial}>{item.dial}</Text>
+                </TouchableOpacity>
+              )}
+              keyboardShouldPersistTaps="handled"
+            />
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -150,19 +356,11 @@ const styles = StyleSheet.create({
   },
 
   brand: { alignItems: 'center', marginBottom: 32 },
-  logoMark: {
-    width: 72,
+  logo: {
+    width: 200,
     height: 72,
-    borderRadius: 20,
-    backgroundColor: 'rgba(74,222,128,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(74,222,128,0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
-  logoLeaf: { fontSize: 36 },
-  brandName: { fontSize: 22, fontWeight: '800', color: TEXT, marginBottom: 4 },
   brandTagline: { fontSize: 13, color: SUBTEXT },
 
   heading: { fontSize: 26, fontWeight: '800', color: TEXT, marginBottom: 6 },
@@ -208,6 +406,39 @@ const styles = StyleSheet.create({
   forgotBtn: { alignSelf: 'flex-end', marginBottom: 24 },
   forgotText: { fontSize: 13, color: ACCENT },
 
+  tabRow: {
+    flexDirection: 'row',
+    backgroundColor: TAB_BG,
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: INPUT_BORDER,
+  },
+  tab: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  tabActive: { backgroundColor: TEXT },
+  tabText: { fontSize: 14, fontWeight: '600', color: SUBTEXT },
+  tabTextActive: { color: '#0B1E10' },
+
+  phoneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: INPUT_BG,
+    borderWidth: 1,
+    borderColor: INPUT_BORDER,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  dialPicker: {
+    paddingVertical: 15,
+    paddingRight: 8,
+    borderRightWidth: 1,
+    borderRightColor: INPUT_BORDER,
+  },
+  dialText: { fontSize: 14, color: TEXT },
+  phoneInput: { flex: 1, fontSize: 15, color: TEXT, paddingVertical: 15 },
+
   ctaBtn: {
     backgroundColor: ACCENT,
     borderRadius: 14,
@@ -222,6 +453,22 @@ const styles = StyleSheet.create({
   ctaBtnDisabled: { opacity: 0.6 },
   ctaBtnText: { fontSize: 16, fontWeight: '700', color: '#0B1E10' },
 
+  dividerRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 18 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: INPUT_BORDER },
+  dividerText: { color: SUBTEXT, fontSize: 13, marginHorizontal: 12 },
+
+  googleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 14,
+    gap: 10,
+  },
+  googleIcon: { fontSize: 18, fontWeight: '700', color: '#4285F4' },
+  googleBtnText: { fontSize: 15, fontWeight: '600', color: '#333' },
+
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -229,4 +476,15 @@ const styles = StyleSheet.create({
   },
   footerText: { fontSize: 14, color: SUBTEXT },
   footerLink: { fontSize: 14, color: ACCENT, fontWeight: '600' },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#0F2216', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '75%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: INPUT_BORDER },
+  modalTitle: { fontSize: 16, fontWeight: '700', color: TEXT },
+  modalClose: { fontSize: 18, color: SUBTEXT, padding: 4 },
+  searchInput: { margin: 16, backgroundColor: INPUT_BG, borderWidth: 1, borderColor: INPUT_BORDER, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: TEXT },
+  countryItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  countryItemActive: { backgroundColor: 'rgba(74,222,128,0.08)' },
+  countryItemText: { fontSize: 15, color: TEXT },
+  countryItemDial: { fontSize: 14, color: ACCENT, fontWeight: '600' },
 });

@@ -8,8 +8,7 @@ import React, {
   type ReactNode,
 } from 'react';
 import NetInfo from '@react-native-community/netinfo';
-import { database } from '../db/database';
-import { runSync, getLastSyncedAt, type SyncPhase } from '../services/syncService';
+import { runSync, type SyncPhase } from '../services/syncService';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -45,29 +44,20 @@ export function SyncProvider({ children }: { children: ReactNode }) {
   const syncingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load persisted last-synced timestamp on mount
-  useEffect(() => {
-    getLastSyncedAt().then((ts) => {
-      if (ts !== null) {
-        setState((prev) => ({ ...prev, lastSyncedAt: ts }));
-      }
-    });
-  }, []);
-
   const performSync = useCallback(async () => {
     if (syncingRef.current) { return; }
     syncingRef.current = true;
 
     try {
-      const result = await runSync(database, (phase) => {
+      const result = await runSync((phase) => {
         setState((prev) => ({ ...prev, phase, syncError: null }));
       });
 
       setState((prev) => ({
         ...prev,
         phase: 'idle',
-        lastSyncedAt: result.pulledAt != null ? new Date(result.pulledAt) : prev.lastSyncedAt,
-        syncError: null,
+        lastSyncedAt: result.synced > 0 ? new Date() : prev.lastSyncedAt,
+        syncError: result.error ?? null,
       }));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);

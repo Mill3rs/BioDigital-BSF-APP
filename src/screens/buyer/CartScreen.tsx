@@ -1,11 +1,13 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Image, TouchableOpacity,
   ActivityIndicator, Alert, RefreshControl,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { cartAPI } from '../../api/cart';
+import { useCartCount } from '../../store/cartStore';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../../utils/theme';
+import { resolveImageUrl } from '../../utils/imageUtils';
 import type { Cart, CartItem } from '../../types';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { BuyerStackParamList } from '../../navigation/BuyerNavigator';
@@ -17,18 +19,24 @@ export default function CartScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updatingItem, setUpdatingItem] = useState<string | null>(null);
+  const { setCartCount } = useCartCount();
+
+  const updateCart = useCallback((c: Cart | null) => {
+    setCart(c);
+    setCartCount(c?.items?.length ?? 0);
+  }, [setCartCount]);
 
   const loadCart = useCallback(async () => {
     try {
       const res = await cartAPI.getCart();
-      setCart(res.data);
+      updateCart(res.data);
     } catch {
       // silent
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [updateCart]);
 
   useFocusEffect(useCallback(() => { loadCart(); }, [loadCart]));
 
@@ -41,7 +49,7 @@ export default function CartScreen({ navigation }: Props) {
     setUpdatingItem(item.id);
     try {
       const res = await cartAPI.updateItem(item.id, newQty);
-      setCart(res.data);
+      updateCart(res.data);
     } catch (err: any) {
       Alert.alert('Error', err?.response?.data?.message ?? 'Could not update cart');
     } finally {
@@ -58,7 +66,7 @@ export default function CartScreen({ navigation }: Props) {
           setUpdatingItem(itemId);
           try {
             const res = await cartAPI.removeItem(itemId);
-            setCart(res.data);
+            updateCart(res.data);
           } catch {
             Alert.alert('Error', 'Could not remove item');
           } finally {
@@ -72,7 +80,7 @@ export default function CartScreen({ navigation }: Props) {
   const renderItem = ({ item }: { item: CartItem }) => (
     <View style={styles.itemCard}>
       {item.variant.product.images?.[0] ? (
-        <Image source={{ uri: item.variant.product.images[0] }} style={styles.itemImage} resizeMode="cover" />
+        <Image source={{ uri: resolveImageUrl(item.variant.product.images[0]) ?? undefined }} style={styles.itemImage} resizeMode="contain" />
       ) : (
         <View style={[styles.itemImage, styles.itemImagePlaceholder]}>
           <Text style={{ fontSize: 28 }}>🌿</Text>
@@ -165,7 +173,7 @@ const styles = StyleSheet.create({
   listContent: { padding: Spacing.md },
 
   itemCard: { flexDirection: 'row', backgroundColor: Colors.surface, borderRadius: Radius.lg, marginBottom: Spacing.sm, padding: Spacing.md, ...Shadow.sm },
-  itemImage: { width: 72, height: 72, borderRadius: Radius.md },
+  itemImage: { width: 72, height: 72, borderRadius: Radius.md, backgroundColor: '#f0f4f0' },
   itemImagePlaceholder: { backgroundColor: '#e8f5e9', alignItems: 'center', justifyContent: 'center' },
   itemInfo: { flex: 1, marginHorizontal: Spacing.md },
   itemName: { ...Typography.body2, color: Colors.textPrimary, fontWeight: '600', marginBottom: 2 },

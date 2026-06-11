@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   ActivityIndicator, Alert,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { ordersAPI } from '../../api/orders';
 import { Colors, Spacing, Radius, Typography, Shadow } from '../../utils/theme';
 import type { Order } from '../../types';
@@ -18,20 +19,24 @@ const STATUS_STEPS = [
   { key: 'READY_FOR_PICKUP', label: 'Ready', icon: '📦' },
   { key: 'OUT_FOR_DELIVERY', label: 'On the Way', icon: '🚚' },
   { key: 'DELIVERED', label: 'Delivered', icon: '🎉' },
+  { key: 'COMPLETED', label: 'Completed', icon: '🏆' },
 ];
 
 export default function OrderDetailScreen({ route, navigation }: Props) {
-  const { orderId } = route.params;
+  const { orderId, submittedReview } = route.params;
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
 
-  useEffect(() => {
+  const fetchOrder = useCallback(() => {
+    setLoading(true);
     ordersAPI.getById(orderId)
       .then(res => setOrder(res.data))
       .catch(() => Alert.alert('Error', 'Could not load order'))
       .finally(() => setLoading(false));
   }, [orderId]);
+
+  useFocusEffect(fetchOrder);
 
   const handleCancel = () => {
     Alert.alert('Cancel Order', 'Are you sure you want to cancel this order?', [
@@ -149,6 +154,60 @@ export default function OrderDetailScreen({ route, navigation }: Props) {
           {cancelling ? <ActivityIndicator color={Colors.error} /> : <Text style={styles.cancelBtnText}>Cancel Order</Text>}
         </TouchableOpacity>
       )}
+
+      {order.status === 'DELIVERED' && !submittedReview && (
+        <TouchableOpacity
+          style={styles.reviewBtn}
+          onPress={() => navigation.navigate('Review', { orderId: order.id })}>
+          <Text style={styles.reviewBtnText}>⭐  Confirm Delivery &amp; Leave Reviews</Text>
+        </TouchableOpacity>
+      )}
+
+      {order.status === 'COMPLETED' && (() => {
+        // Prefer API-returned reviews (item.review); fall back to navigation params
+        const apiReviews = order.items
+          .filter(i => i.review)
+          .map(i => ({
+            productId: i.variant.product.id,
+            productName: i.variant.product.name,
+            rating: i.review!.rating,
+            comment: i.review!.comment,
+          }));
+        const displayReviews = apiReviews.length > 0
+          ? apiReviews
+          : (submittedReview?.productReviews ?? []);
+        const driverRating = submittedReview?.driverRating;
+        const driverComment = submittedReview?.driverComment;
+
+        if (displayReviews.length === 0 && driverRating === undefined) return null;
+        return (
+          <View style={[styles.section, styles.reviewSection]}>
+            <Text style={styles.sectionTitle}>⭐ Your Reviews</Text>
+
+            {driverRating !== undefined && (
+              <View style={styles.reviewItem}>
+                <Text style={styles.reviewItemTitle}>🚗 Driver</Text>
+                <Text style={styles.reviewStars}>
+                  {'★'.repeat(driverRating)}{'☆'.repeat(5 - driverRating)}
+                </Text>
+                {driverComment ? (
+                  <Text style={styles.reviewComment}>"{driverComment}"</Text>
+                ) : null}
+              </View>
+            )}
+
+            {displayReviews.map(r => (
+              <View key={r.productId} style={styles.reviewItem}>
+                <Text style={styles.reviewItemTitle}>{r.productName}</Text>
+                <Text style={styles.reviewStars}>
+                  {'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)}
+                </Text>
+                {r.comment ? <Text style={styles.reviewComment}>"{r.comment}"</Text> : null}
+              </View>
+            ))}
+          </View>
+        );
+      })()}
     </ScrollView>
   );
 }
@@ -203,4 +262,11 @@ const styles = StyleSheet.create({
   cancelBtn: { borderWidth: 1, borderColor: Colors.error, borderRadius: Radius.md, padding: Spacing.md, alignItems: 'center', marginTop: Spacing.sm },
   btnDisabled: { opacity: 0.5 },
   cancelBtnText: { ...Typography.button, color: Colors.error },
+  reviewBtn: { backgroundColor: Colors.primary, borderRadius: Radius.md, padding: Spacing.md, alignItems: 'center', marginTop: Spacing.sm },
+  reviewBtnText: { ...Typography.button, color: '#fff' },
+  reviewSection: { borderLeftWidth: 3, borderLeftColor: Colors.accent },
+  reviewItem: { borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: Spacing.sm, marginTop: Spacing.sm },
+  reviewItemTitle: { ...Typography.label, color: Colors.textPrimary, marginBottom: 2 },
+  reviewStars: { fontSize: 20, color: Colors.accent, letterSpacing: 2, marginBottom: 2 },
+  reviewComment: { ...Typography.body2, color: Colors.textSecondary, fontStyle: 'italic' },
 });

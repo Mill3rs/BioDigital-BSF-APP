@@ -93,10 +93,14 @@ export default function DeliveriesScreen({ navigation }: Readonly<Props>) {
     ...filteredWaste.map(w => ({ kind: 'waste' as const, data: w })),
   ];
 
-  const renderOrder = (item: Order) => (
-    <TouchableOpacity
-      style={styles.card}
-      onPress={() => navigation.navigate('DeliveryDetail', { orderId: item.id })}>
+  const renderOrder = (item: Order) => {
+    const isDone = item.status === 'DELIVERED' || item.status === 'COMPLETED' || item.status === 'CANCELLED';
+    return (
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={isDone ? 1 : 0.85}
+        disabled={isDone}
+        onPress={() => navigation.navigate('DeliveryDetail', { orderId: item.id })}>
       <View style={styles.cardHeader}>
         <Text style={styles.title}>#{item.orderNumber}</Text>
         <View style={[styles.badge, { backgroundColor: (ORDER_STATUS_COLOR[item.status] ?? Colors.textSecondary) + '22' }]}>
@@ -122,7 +126,8 @@ export default function DeliveriesScreen({ navigation }: Readonly<Props>) {
         <Text style={styles.arrow}>→</Text>
       </View>
     </TouchableOpacity>
-  );
+    );
+  };
 
   const renderWaste = (item: WasteRecord) => {
     const addr = (item as any).supplier?.supplierProfile?.collectionAddress
@@ -133,9 +138,12 @@ export default function DeliveriesScreen({ navigation }: Readonly<Props>) {
       : 'No address on record';
     const statusColor = WASTE_STATUS_COLOR[item.status] ?? Colors.textSecondary;
     const statusLabel = (item.status === 'PROCESSING' || item.status === 'ACKNOWLEDGED') ? 'Delivered' : item.status.replaceAll('_', ' ');
+    const isDone = DELIVERED_WASTE_STATUSES.has(item.status);
     return (
       <TouchableOpacity
         style={[styles.card, styles.wasteCard]}
+        activeOpacity={isDone ? 1 : 0.85}
+        disabled={isDone}
         onPress={() =>
           DELIVERED_WASTE_STATUSES.has(item.status)
             ? navigation.navigate('WasteDetail', { item })

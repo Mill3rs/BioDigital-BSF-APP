@@ -17,6 +17,11 @@ export const driverAPI = {
     return data;
   },
 
+  getDeliveryById: async (orderId: string) => {
+    const { data } = await apiClient.get<ApiResponse<Order>>(`/driver/deliveries/${orderId}`);
+    return data;
+  },
+
   updateDeliveryStatus: async (orderId: string, status: string, notes?: string) => {
     const { data } = await apiClient.patch<ApiResponse<Order>>(
       `/driver/deliveries/${orderId}/status`,
@@ -25,10 +30,22 @@ export const driverAPI = {
     return data;
   },
 
-  updateLocation: async (lat: number, lng: number) => {
+  updateLocation: async (lat: number, lng: number, wasteId?: string) => {
     const { data } = await apiClient.post<ApiResponse<null>>('/driver/location', {
-      currentLocation: { lat, lng },
+      lat,
+      lng,
+      ...(wasteId ? { wasteId } : {}),
     });
+    return data;
+  },
+
+  getDriverLocation: async (wasteId: string) => {
+    const { data } = await apiClient.get<ApiResponse<{ driverName: string; location: { lat: number; lng: number; updatedAt: string } | null } | null>>(`/driver/location/${wasteId}`);
+    return data;
+  },
+
+  getCompanyLocation: async () => {
+    const { data } = await apiClient.get<ApiResponse<{ companyName: string; lat: number | null; lng: number | null; address: string | null; city: string | null; region: string | null; country: string | null } | null>>('/driver/company');
     return data;
   },
 

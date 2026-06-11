@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { useAuth } from '../../store/authStore';
 import { COUNTRY_CODES, type CountryCode } from '../../utils/countryCodes';
+import { apiClient } from '../../api/client';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { AuthStackParamList } from '../../navigation/AuthNavigator';
 
@@ -55,6 +56,14 @@ export default function RegisterScreen({ navigation, route }: Readonly<Props>) {
   const [organizationName, setOrganizationName] = useState('');
   const [countryPickerOpen, setCountryPickerOpen] = useState(false);
   const [countrySearch, setCountrySearch] = useState('');
+  const [phoneAuthEnabled, setPhoneAuthEnabled] = useState(false);
+
+  useEffect(() => {
+    apiClient
+      .get<{ success: boolean; data: { phoneAuthEnabled: boolean } }>('/auth/public-settings')
+      .then((res) => { if (res.data.success) setPhoneAuthEnabled(res.data.data.phoneAuthEnabled); })
+      .catch(() => { /* default to false */ });
+  }, []);
 
   const filteredCountries = countrySearch.trim()
     ? COUNTRY_CODES.filter(
@@ -65,8 +74,16 @@ export default function RegisterScreen({ navigation, route }: Readonly<Props>) {
     : COUNTRY_CODES;
 
   const handleRegister = async () => {
-    if (!fullName.trim() || !email.trim() || !password.trim()) {
-      Alert.alert('Missing fields', 'Please fill in all required fields.');
+    const phoneNumber = phoneLocal.trim()
+      ? selectedCountry.dial + phoneLocal.trim()
+      : undefined;
+    if (!fullName.trim() || (!email.trim() && (!phoneAuthEnabled || !phoneNumber))) {
+      Alert.alert(
+        'Missing fields',
+        phoneAuthEnabled
+          ? 'Please provide your full name and at least an email or phone number.'
+          : 'Please provide your full name and email address.',
+      );
       return;
     }
     if (password.length < 6) {
@@ -77,13 +94,10 @@ export default function RegisterScreen({ navigation, route }: Readonly<Props>) {
       Alert.alert('Password mismatch', 'Passwords do not match.');
       return;
     }
-    const phoneNumber = phoneLocal.trim()
-      ? selectedCountry.dial + phoneLocal.trim()
-      : undefined;
     try {
       await register({
         fullName: fullName.trim(),
-        email: email.trim(),
+        email: email.trim() || undefined,
         password,
         phoneNumber,
         role: initialRole,
@@ -166,7 +180,7 @@ export default function RegisterScreen({ navigation, route }: Readonly<Props>) {
           />
           <TextInput
             style={styles.input}
-            placeholder="Email Address"
+            placeholder={phoneAuthEnabled ? 'Email Address (optional if phone provided)' : 'Email Address'}
             placeholderTextColor={PLACEHOLDER}
             value={email}
             onChangeText={setEmail}
@@ -174,23 +188,25 @@ export default function RegisterScreen({ navigation, route }: Readonly<Props>) {
             autoCapitalize="none"
           />
 
-          {/* Phone */}
-          <TouchableOpacity
-            style={styles.countryRow}
-            onPress={() => setCountryPickerOpen(true)}
-            activeOpacity={0.7}>
-            <Text style={styles.countryFlag}>{selectedCountry.flag}</Text>
-            <Text style={styles.countryDialText}>{selectedCountry.dial}</Text>
-            <Text style={styles.countryChevron}>▾</Text>
-            <TextInput
-              style={styles.phoneInput}
-              placeholder="Phone Number"
-              placeholderTextColor={PLACEHOLDER}
-              value={phoneLocal}
-              onChangeText={(t) => setPhoneLocal(t.split('').filter(ch => ch >= '0' && ch <= '9').join(''))}
-              keyboardType="number-pad"
-            />
-          </TouchableOpacity>
+          {/* Phone — only shown when phone auth is enabled */}
+          {phoneAuthEnabled && (
+            <TouchableOpacity
+              style={styles.countryRow}
+              onPress={() => setCountryPickerOpen(true)}
+              activeOpacity={0.7}>
+              <Text style={styles.countryFlag}>{selectedCountry.flag}</Text>
+              <Text style={styles.countryDialText}>{selectedCountry.dial}</Text>
+              <Text style={styles.countryChevron}>▾</Text>
+              <TextInput
+                style={styles.phoneInput}
+                placeholder="Phone Number"
+                placeholderTextColor={PLACEHOLDER}
+                value={phoneLocal}
+                onChangeText={(t) => setPhoneLocal(t.split('').filter(ch => ch >= '0' && ch <= '9').join(''))}
+                keyboardType="number-pad"
+              />
+            </TouchableOpacity>
+          )}
 
           <TextInput
             style={styles.input}

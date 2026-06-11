@@ -137,11 +137,13 @@ export default function WastePickupsScreen() {
     const time = getTime(item);
     const isCollecting = collecting === item.id;
     const isActionable = ['PENDING', 'SCHEDULED'].includes(item.status);
+    const isDone = ['PROCESSING', 'PROCESSED', 'COMPLETED', 'ACKNOWLEDGED'].includes(item.status);
 
     return (
       <TouchableOpacity
         style={styles.card}
-        activeOpacity={0.85}
+        activeOpacity={isDone ? 1 : 0.85}
+        disabled={isDone}
         onPress={() => openMap(item)}>
         {/* Header */}
         <View style={styles.cardHeader}>

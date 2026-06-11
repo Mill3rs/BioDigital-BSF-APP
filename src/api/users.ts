@@ -11,8 +11,17 @@ export const usersAPI = {
     fullName?: string;
     phoneNumber?: string;
     profileImage?: string;
+    location?: string;
   }) => {
     const { data } = await apiClient.put<ApiResponse<User>>('/users/profile', payload);
+    return data;
+  },
+
+  uploadProfilePicture: async (base64: string, mimeType: string): Promise<ApiResponse<User>> => {
+    const { data } = await apiClient.post<ApiResponse<User>>('/users/upload-profile-picture', {
+      base64,
+      mimeType,
+    });
     return data;
   },
 

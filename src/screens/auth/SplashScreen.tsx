@@ -5,6 +5,7 @@ import {
   StyleSheet,
   Animated,
   Easing,
+  Image,
 } from 'react-native';
 
 const BG = '#0B1E10';
@@ -51,19 +52,13 @@ export default function SplashScreen({ onReady }: Readonly<Props>) {
   return (
     <View style={styles.container}>
       <Animated.View style={[styles.center, { opacity: fade, transform: [{ scale }] }]}>
-        {/* Logo mark */}
-        <View style={styles.logoMark}>
-          <View style={styles.logoInner}>
-            <Text style={styles.logoLeaf}>🌿</Text>
-          </View>
-          <View style={styles.logoBadge}>
-            <Text style={styles.logoBadgeText}>BSF</Text>
-          </View>
-        </View>
-
-        {/* Brand name */}
-        <Text style={styles.brandTop}>BioDigital</Text>
-        <Text style={styles.brandBottom}>BSF Farm</Text>
+        {/* Logo */}
+        <Image
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          source={require('../../assets/BioDigitalBSFWhiteMono.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
         <Text style={styles.tagline}>Sustainable Waste Solutions</Text>
       </Animated.View>
 
@@ -88,50 +83,10 @@ const styles = StyleSheet.create({
   center: {
     alignItems: 'center',
   },
-  logoMark: {
-    width: 100,
-    height: 100,
-    borderRadius: 28,
-    backgroundColor: 'rgba(74,222,128,0.15)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(74,222,128,0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  logo: {
+    width: 220,
+    height: 80,
     marginBottom: 20,
-    position: 'relative',
-  },
-  logoInner: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoLeaf: { fontSize: 48 },
-  logoBadge: {
-    position: 'absolute',
-    bottom: -8,
-    right: -8,
-    backgroundColor: ACCENT,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  logoBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#0B1E10',
-    letterSpacing: 0.5,
-  },
-  brandTop: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  brandBottom: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: ACCENT,
-    marginTop: -4,
-    letterSpacing: 1,
   },
   tagline: {
     fontSize: 13,

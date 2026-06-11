@@ -22,4 +22,9 @@ export const productsAPI = {
     const { data } = await apiClient.get<ApiResponse<Product>>(`/products/${id}`);
     return data;
   },
+
+  submitReview: async (productId: string, payload: { rating: number; title?: string; comment?: string }) => {
+    const { data } = await apiClient.post<ApiResponse<unknown>>(`/products/${productId}/reviews`, payload);
+    return data;
+  },
 };

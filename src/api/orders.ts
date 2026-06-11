@@ -26,4 +26,9 @@ export const ordersAPI = {
     const { data } = await apiClient.post<ApiResponse<Order>>(`/orders/${id}/update-status`, { status });
     return data;
   },
+
+  confirmDelivery: async (id: string, payload?: { driverRating?: number; driverComment?: string }) => {
+    const { data } = await apiClient.post<ApiResponse<Order>>(`/orders/${id}/confirm-delivery`, payload ?? {});
+    return data;
+  },
 };

@@ -257,14 +257,15 @@ async function fetchRoute(origin: Coords, destination: Coords): Promise<Coords[]
   return decodePolyline(poly);
 }
 
-function openNavigationApp(coords: Coords | null, addressText: string) {  // Always prefer lat/lng for precision; fall back to text only if coords unavailable
+function openNavigationApp(coords: Coords | null, addressText: string, label?: string) {
+  // Always prefer lat/lng for precision; fall back to text only if coords unavailable
   if (coords) {
     const { latitude: lat, longitude: lng } = coords;
     const url = Platform.select({
       ios: `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`,
       android: `google.navigation:q=${lat},${lng}&mode=d`,
     });
-    const webUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+    const webUrl = 'https://www.google.com/maps/dir/?api=1&destination=' + lat + ',' + lng + '&travelmode=driving';
     if (url) {
       Linking.canOpenURL(url).then(supported => {
         Linking.openURL(supported ? url : webUrl);
@@ -272,9 +273,14 @@ function openNavigationApp(coords: Coords | null, addressText: string) {  // Alw
     } else {
       Linking.openURL(webUrl);
     }
-  } else {
+  } else if (addressText && addressText !== 'Waste processing center') {
     Linking.openURL(
-      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressText)}`,
+      'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(addressText) + '&travelmode=driving',
+    );
+  } else {
+    const query = label ?? addressText;
+    Linking.openURL(
+      'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(query),
     );
   }
 }
@@ -298,6 +304,8 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
   const [tripStart, setTripStart] = useState<Date | null>(null);
   const [elapsedSecs, setElapsedSecs] = useState(0);
   const [plantCoords, setPlantCoords] = useState<Coords | null>(resolvePlantCoords(item));
+  const [plantName, setPlantName] = useState<string>(buildPlantName(item));
+  const [plantAddress, setPlantAddress] = useState<string>(buildPlantAddress(item));
   const [plantGeocoding, setPlantGeocoding] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // mirrors of elapsed/pickup for use inside callbacks without stale closures
@@ -392,13 +400,19 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Clear stale route when trip phase switches so the dashed fallback shows ─
+  useEffect(() => {
+    setRouteCoords([]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripPhase]);
+
   // ── Fetch driving route whenever driver position or target changes ────────
   useEffect(() => {
     if (!driverCoords || !targetCoords) { setRouteCoords([]); return; }
     fetchRoute(driverCoords, targetCoords)
       .then(path => { if (path.length > 0) setRouteCoords(path); })
       .catch(() => setRouteCoords([]));
-  // targetCoords changes on phase switch; driverCoords triggers on first GPS fix.
+  // targetCoords changes on phase switch (going → returning); driverCoords on first GPS fix.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetCoords, driverCoords]);
 
@@ -420,7 +434,67 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
     };
   }, [tripPhase, tripStart]);
 
-  // ── Geocode plant address when returning (if not already resolved) ────────
+  // ── Broadcast driver location to backend while trip is active ────────────
+  const broadcastIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const driverCoordsRef = useRef<Coords | null>(null);
+
+  function clearBroadcast() {
+    if (broadcastIntervalRef.current) {
+      clearInterval(broadcastIntervalRef.current);
+      broadcastIntervalRef.current = null;
+    }
+  }
+
+  // Keep ref in sync so interval callback always has latest coords
+  useEffect(() => { driverCoordsRef.current = driverCoords; }, [driverCoords]);
+
+  useEffect(() => {
+    if (tripPhase === 'going' || tripPhase === 'returning') {
+      broadcastIntervalRef.current = setInterval(() => {
+        const coords = driverCoordsRef.current;
+        if (coords) {
+          driverAPI.updateLocation(coords.latitude, coords.longitude, item.id).catch(() => {});
+        }
+      }, 5000);
+    } else {
+      clearBroadcast();
+    }
+    return () => { clearBroadcast(); };
+  }, [tripPhase, item.id]);
+
+  // ── Load company (processing center) location on mount ───────────────────
+  useEffect(() => {
+    driverAPI.getCompanyLocation()
+      .then(res => {
+        const co = res.data;
+        if (co?.lat && co?.lng) {
+          const lat = co.lat;
+          const lng = co.lng;
+          setPlantCoords({ latitude: lat, longitude: lng });
+          if (co.companyName) setPlantName(co.companyName);
+          // Use address fields exactly as entered in Settings → Company → Processing Center Location
+          const addrParts = [co.address, co.city, co.region, co.country].filter(Boolean);
+          if (addrParts.length > 0) {
+            setPlantAddress(addrParts.join(', '));
+          } else {
+            // No address text saved — reverse-geocode the coords for display
+            fetch(
+              `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`,
+            )
+              .then(r => r.json())
+              .then((data: any) => {
+                const addr = data?.results?.[0]?.formatted_address;
+                if (addr) setPlantAddress(addr);
+              })
+              .catch(() => {});
+          }
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Geocode plant address when returning (fallback if company has no coords) ─
   useEffect(() => {
     if (tripPhase !== 'returning' || plantCoords) return;
     const farm = item.farm;
@@ -609,11 +683,11 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
           }
           return null;
         })()}
-        {/* Driver dot */}
+        {/* Driver car marker */}
         {driverCoords ? (
-          <Marker coordinate={driverCoords} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
-            <View style={styles.driverMarker}>
-              <View style={styles.driverMarkerInner} />
+          <Marker coordinate={driverCoords} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={true}>
+            <View style={styles.carMarker}>
+              <Text style={styles.carMarkerIcon}>🚗</Text>
             </View>
           </Marker>
         ) : null}
@@ -628,8 +702,8 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
             </View>
           </Marker>
         ) : null}
-        {/* Plant marker */}
-        {isReturning && plantCoords ? (
+        {/* Plant / processing centre marker — always visible */}
+        {plantCoords ? (
           <Marker coordinate={plantCoords} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}>
             <View style={styles.pickupMarkerWrap}>
               <View style={[styles.pickupMarkerBubble, styles.plantMarkerBubble]}>
@@ -800,8 +874,7 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
   }
 
   function renderReturningCard() {
-    const plantName = buildPlantName(item);
-    const plantAddr = buildPlantAddress(item);
+    const plantAddr = plantAddress;
     return (
       <>
         <View style={[styles.tripBanner, styles.tripBannerBlue]}>
@@ -831,7 +904,7 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
               <Text style={styles.addressText} numberOfLines={2}>{plantAddr}</Text>
             </View>
           </View>
-          <TouchableOpacity style={styles.callBtn} onPress={() => openNavigationApp(plantCoords, plantAddr)}>
+          <TouchableOpacity style={styles.callBtn} onPress={() => openNavigationApp(plantCoords, plantAddr, plantName)}>
             <Text style={styles.callBtnIcon}>🧭</Text>
           </TouchableOpacity>
         </View>
@@ -845,7 +918,6 @@ export default function WastePickupMapScreen({ route, navigation }: Readonly<Pro
   }
 
   function renderDoneSummary() {
-    const plantName = buildPlantName(item);
     const deliverySecs = elapsedRef.current - pickupRef.current;
     return (
       <View style={styles.doneWrap}>
@@ -972,6 +1044,22 @@ const styles = StyleSheet.create({
   noMapSub: { fontSize: 13, color: Colors.textSecondary, textAlign: 'center', lineHeight: 18 },
 
   // ── Custom markers ──
+  carMarker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  carMarkerIcon: { fontSize: 20 },
   driverMarker: {
     width: 22,
     height: 22,
